@@ -6,6 +6,8 @@ export default class WorkAgentExtension implements Extension {
 
   async onAgentStart(context: AgentContext): Promise<void> {
     console.log('Work Agent Extension started.');
+    // In a real environment, we'd ensure directories exist here if not already handled by a setup script.
+    // For this POC, we rely on the environment being pre-configured as per doc/architecture.
   }
 
   registerCommands(): Command[] {
