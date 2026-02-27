@@ -1,11 +1,11 @@
 import { AgentContext, Command, Extension, Tool, ToolCall } from '@mariozechner/pi-agent';
 
-export default class WorkAgentExtension implements Extension {
-  name = 'work-agent';
-  description = 'Always-On Engineering Work Agent';
+export default class LovelaceExtension implements Extension {
+  name = 'lovelace';
+  description = 'Always-On Engineering Lovelace';
 
   async onAgentStart(context: AgentContext): Promise<void> {
-    console.log('Work Agent Extension started.');
+    console.log('Lovelace Extension started.');
     // In a real environment, we'd ensure directories exist here if not already handled by a setup script.
     // For this POC, we rely on the environment being pre-configured as per doc/architecture.
   }
@@ -13,13 +13,13 @@ export default class WorkAgentExtension implements Extension {
   registerCommands(): Command[] {
     return [
       {
-        name: 'work-agent',
-        description: 'Work Agent status and management',
+        name: 'lovelace',
+        description: 'Lovelace status and management',
         handler: async (args: string[], context: AgentContext) => {
           if (args[0] === 'status') {
-            return 'Work Agent is active. \n- Memory: Online\n- Adapters: GitHub, Jira, Slack\n- Policy: Read-only (default)';
+            return 'Lovelace is active. \n- Memory: Online\n- Adapters: GitHub, Jira, Slack\n- Policy: Read-only (default)';
           }
-          return 'Usage: /work-agent status';
+          return 'Usage: /lovelace status';
         },
       },
     ];
@@ -34,7 +34,7 @@ export default class WorkAgentExtension implements Extension {
         // Simplified check: if it's run_in_bash_session, we'd need more logic to see if it's a mutation.
         // For now, let's just log and block for demonstration.
         console.warn(`Blocking potentially mutating tool call: ${call.tool}`);
-        throw new Error(`Action '${call.tool}' blocked by Work Agent policy. Mutation requires explicit approval.`);
+        throw new Error(`Action '${call.tool}' blocked by Lovelace policy. Mutation requires explicit approval.`);
     }
   }
 }

@@ -1,4 +1,4 @@
-# Always-On Work Agent (Pi-based) — Planning Docs
+# Always-On Lovelace (Pi-based) — Planning Docs
 
 This folder contains the initial research and spec for building a personal, always-on engineering assistant on top of **pi**.
 

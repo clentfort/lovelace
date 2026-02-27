@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import WorkAgentExtension from '../extensions/work-agent/index';
+import LovelaceExtension from '../extensions/lovelace/index';
 
 // Simple mock context to simulate agent session
 const mockContext: any = {
@@ -8,20 +8,20 @@ const mockContext: any = {
   }
 };
 
-describe('Work Agent Integration', () => {
+describe('Lovelace Integration', () => {
   it('should initialize and handle status command', async () => {
-    const extension = new WorkAgentExtension();
+    const extension = new LovelaceExtension();
     await extension.onAgentStart(mockContext);
 
     const commands = extension.registerCommands();
-    const statusCmd = commands.find(c => c.name === 'work-agent');
+    const statusCmd = commands.find(c => c.name === 'lovelace');
 
     const result = await statusCmd?.handler(['status'], mockContext);
-    expect(result).toContain('Work Agent is active');
+    expect(result).toContain('Lovelace is active');
   });
 
   it('should enforce read-only policy across different tool calls', async () => {
-    const extension = new WorkAgentExtension();
+    const extension = new LovelaceExtension();
 
     const sequence = [
       { tool: 'list_files', args: { path: '.' }, shouldPass: true },

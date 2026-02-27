@@ -7,15 +7,15 @@ Create project skeleton and safe execution baseline.
 
 ### Deliverables
 - Pi package scaffold:
-  - `extensions/work-agent/`
-  - `skills/work-agent/`
-  - `prompts/work-agent/`
+  - `extensions/lovelace/`
+  - `skills/lovelace/`
+  - `prompts/lovelace/`
 - Local config/state directories initialized.
 - Basic policy engine (read-only default, mutating blocked unless approved).
 
 ### Exit criteria
 - Extension loads reliably in Pi.
-- `/work-agent status` command works.
+- `/lovelace status` command works.
 - Tool-call gate blocks forbidden mutating operations.
 
 ---

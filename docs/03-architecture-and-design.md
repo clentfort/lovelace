@@ -11,12 +11,12 @@ Why:
 
 ## 2) High-level components
 
-1. **work-agent extension (Pi package)**
+1. **lovelace extension (Pi package)**
    - slash commands (`/triage`, `/inbox`, `/plan`, `/approve`)
    - tool guards (`tool_call` interception)
    - UI status/widgets for pending proposals
 
-2. **work-agent daemon (SDK session runner)**
+2. **lovelace daemon (SDK session runner)**
    - polling/ingestion loop for external signals
    - proposal generation job
    - writes to local event store
@@ -40,7 +40,7 @@ Why:
 ## 3) Proposed local data layout
 
 ```text
-~/.work-agent/
+~/.lovelace/
   config.toml
   policies.toml
   events/

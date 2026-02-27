@@ -95,7 +95,7 @@ Pi already covers many primitives needed for this project:
    - ideal for operational runbooks and standardized procedures.
 
 4. **Package model** (`docs/packages.md`)
-   - lets you distribute your work-agent as an installable Pi package.
+   - lets you distribute your lovelace as an installable Pi package.
 
 5. **Modes**
    - interactive (tmux-native), print/json, RPC/SDK for integrations.
