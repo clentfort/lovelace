@@ -2,13 +2,20 @@
 
 - Documentation is well-structured and covers research, spec, architecture, and roadmap.
 - The project is currently in the transition from planning to implementation (Phase 0).
-- `pi` command is not available in the current shell. Need to determine the correct way to set up the Pi environment.
-- Extension entry point `extensions/lovelace/index.ts` uses `@mariozechner/pi-agent` types.
+- `pi` command is available in this environment at `/Users/lentfortc/.volta/bin/pi`.
+- Extension entry point `extensions/lovelace/index.ts` is now migrated to the current function-style Pi extension API (`export default function (pi) { ... }`).
 - Tool gate implemented in `index.ts` successfully blocks `write_file`, `delete_file`, `rename_file`, and `run_in_bash_session` in simulation.
-- Local state directories are set up in `/home/jules/.lovelace/`.
+- Local state directories are set up under `~/.lovelace/` for config/events/memory.
 - Unit tests (vitest) implemented for `index.ts` cover command registration and policy enforcement.
 - Integration tests (vitest) simulate basic agent session and multi-step tool interactions.
-- Added `@mariozechner/pi-agent` as a dev dependency to enable proper typing and testing without excessive mocking.
+- Legacy dependency `@mariozechner/pi-agent` has been removed from `devDependencies` after migration.
+- Test suite still passes after dependency cleanup (`8/8`).
 - Unified search adapter interface `Adapter` and `SearchResult` defined in `extensions/lovelace/adapters/types.ts`.
 - Mock adapters implemented for GitHub, Jira, and Slack.
-- `/search` command added to `LovelaceExtension` that aggregates results from all adapters.
+- `/search` command is implemented via `pi.registerCommand("search", ...)` and aggregates results from all adapters.
+- Earlier runtime error (`Class constructor LovelaceExtension cannot be invoked without 'new'`) was caused by API mismatch (legacy class-style extension shape vs current Pi function-style extension API).
+- After migration, the extension loads successfully with `pi -e ./extensions/lovelace/index.ts` (no extension load error).
+- Confirmed runtime compatibility by loading Lovelace together with Pi's upstream `examples/extensions/hello.ts` and successfully executing the hello tool.
+- Added project-local extension auto-discovery shim at `.pi/extensions/lovelace.ts` pointing to `extensions/lovelace/index.ts`.
+- When auto-discovery is active, passing `-e ./extensions/lovelace/index.ts` in the same repo double-loads and causes expected command-name conflict warnings.
+- Test suite passes after migration (`8/8` tests via `vitest run`).

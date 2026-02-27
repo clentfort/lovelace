@@ -1,69 +1,82 @@
 import { describe, it, expect } from 'vitest';
-import LovelaceExtension from './index';
+import lovelaceExtension, {
+  formatStatus,
+  isMutatingToolCall,
+} from './index';
 
-describe('LovelaceExtension', () => {
-  it('should have the correct name and description', () => {
-    const extension = new LovelaceExtension();
-    expect(extension.name).toBe('lovelace');
-    expect(extension.description).toBe('Always-On Engineering Lovelace');
+function createPiMock() {
+  const commands = new Map<string, any>();
+  const events = new Map<string, any>();
+
+  return {
+    commands,
+    events,
+    registerCommand(name: string, definition: any) {
+      commands.set(name, definition);
+    },
+    on(eventName: string, handler: any) {
+      events.set(eventName, handler);
+    },
+  };
+}
+
+describe('Lovelace extension (Pi API)', () => {
+  it('registers expected commands and event handlers', () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
+
+    expect(pi.commands.has('lovelace')).toBe(true);
+    expect(pi.commands.has('search')).toBe(true);
+    expect(pi.events.has('tool_call')).toBe(true);
+    expect(pi.events.has('session_start')).toBe(true);
+    expect(pi.events.has('session_shutdown')).toBe(true);
   });
 
-  it('should register the lovelace command', () => {
-    const extension = new LovelaceExtension();
-    const commands = extension.registerCommands();
-    const workAgentCommand = commands.find(c => c.name === 'lovelace');
+  it('returns formatted lovelace status', async () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
 
-    expect(workAgentCommand).toBeDefined();
-    expect(workAgentCommand?.description).toBe('Lovelace status and management');
+    const result = await pi.commands.get('lovelace').handler('status');
+    expect(result).toBe(formatStatus());
+    expect(result).toContain('Lovelace is active.');
   });
 
-  it('should return the correct status from the command handler', async () => {
-    const extension = new LovelaceExtension();
-    const commands = extension.registerCommands();
-    const workAgentCommand = commands.find(c => c.name === 'lovelace');
+  it('returns aggregated results from /search', async () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
 
-    const context: any = {};
-    const result = await workAgentCommand?.handler(['status'], context);
-
-    expect(result).toContain('Lovelace is active');
-    expect(result).toContain('Memory: Online');
-  });
-
-  it('should return results from /search command', async () => {
-    const extension = new LovelaceExtension();
-    const commands = extension.registerCommands();
-    const searchCommand = commands.find(c => c.name === 'search');
-
-    const context: any = {};
-    const result = await searchCommand?.handler(['incident', 'report'], context);
-
+    const result = await pi.commands.get('search').handler('incident report');
     expect(result).toContain('[github]');
     expect(result).toContain('[jira]');
     expect(result).toContain('[slack]');
     expect(result).toContain('incident report');
   });
 
-  it('should block mutating tools in tool_call', async () => {
-    const extension = new LovelaceExtension();
-    const context: any = {};
+  it('blocks mutating tool calls via tool_call event', async () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
 
-    const mutatingTools = ['write_file', 'delete_file', 'rename_file', 'run_in_bash_session'];
+    const onToolCall = pi.events.get('tool_call');
 
-    for (const tool of mutatingTools) {
-      const call: any = { tool };
-      await expect(extension.tool_call(call, context)).rejects.toThrow(/blocked by Lovelace policy/);
-    }
+    await expect(onToolCall({ toolName: 'write', input: { path: 'a.txt' } })).resolves.toEqual(
+      expect.objectContaining({ block: true }),
+    );
+
+    await expect(
+      onToolCall({ toolName: 'bash', input: { command: 'rm -rf /tmp/test' } }),
+    ).resolves.toEqual(expect.objectContaining({ block: true }));
+
+    await expect(
+      onToolCall({ toolName: 'bash', input: { command: 'ls -la' } }),
+    ).resolves.toBeUndefined();
   });
 
-  it('should allow non-mutating tools in tool_call', async () => {
-    const extension = new LovelaceExtension();
-    const context: any = {};
-
-    const safeTools = ['read_file', 'list_files', 'google_search'];
-
-    for (const tool of safeTools) {
-      const call: any = { tool };
-      await expect(extension.tool_call(call, context)).resolves.not.toThrow();
-    }
+  it('classifies mutating tools and commands', () => {
+    expect(isMutatingToolCall('write')).toBe(true);
+    expect(isMutatingToolCall('edit')).toBe(true);
+    expect(isMutatingToolCall('run_in_bash_session')).toBe(true);
+    expect(isMutatingToolCall('bash', { command: 'git commit -m "x"' })).toBe(true);
+    expect(isMutatingToolCall('bash', { command: 'git status' })).toBe(false);
+    expect(isMutatingToolCall('read')).toBe(false);
   });
 });

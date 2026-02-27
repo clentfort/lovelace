@@ -12,3 +12,17 @@
     - [ ] Add event log and SQLite persistence for memory.
     - [ ] Add `/memory add` and `/memory find` commands.
     - [ ] Add `/repo profile` command.
+- [x] Verify extension loading in current Pi runtime.
+    - [x] Run `pi -e ./extensions/lovelace/index.ts -p "/lovelace status"`.
+    - [x] Confirm runtime load error: `Class constructor LovelaceExtension cannot be invoked without 'new'`.
+    - [x] Validate Pi extension loader works with current API using upstream example extension (`examples/extensions/hello.ts`).
+- [x] Migrate Lovelace extension to current Pi API.
+    - [x] Rewrite `extensions/lovelace/index.ts` to default-export function-style extension (`registerCommand` + `on("tool_call")`).
+    - [x] Preserve `/lovelace status`, `/search`, and read-only policy gating behavior.
+    - [x] Update tests to validate command registration and tool-call blocking with Pi-style mocks.
+    - [x] Add project-local auto-discovery entrypoint at `.pi/extensions/lovelace.ts`.
+    - [x] Validate direct runtime load from outside repo with `pi -e /Users/lentfortc/Code/lovelace/extensions/lovelace/index.ts` (no load error).
+    - [x] Validate project-local auto-discovery path works by running Pi in repo with additional hello extension.
+- [x] Clean up legacy extension dependency.
+    - [x] Remove `@mariozechner/pi-agent` from `devDependencies`.
+    - [x] Re-run test suite after dependency removal.

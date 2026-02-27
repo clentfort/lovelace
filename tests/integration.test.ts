@@ -1,41 +1,55 @@
 import { describe, it, expect } from 'vitest';
-import LovelaceExtension from '../extensions/lovelace/index';
+import lovelaceExtension from '../extensions/lovelace/index';
 
-// Simple mock context to simulate agent session
-const mockContext: any = {
-  session: {
-    id: 'test-session',
-  }
-};
+function createPiMock() {
+  const commands = new Map<string, any>();
+  const events = new Map<string, any>();
 
-describe('Lovelace Integration', () => {
-  it('should initialize and handle status command', async () => {
-    const extension = new LovelaceExtension();
-    await extension.onAgentStart(mockContext);
+  return {
+    commands,
+    events,
+    registerCommand(name: string, definition: any) {
+      commands.set(name, definition);
+    },
+    on(eventName: string, handler: any) {
+      events.set(eventName, handler);
+    },
+  };
+}
 
-    const commands = extension.registerCommands();
-    const statusCmd = commands.find(c => c.name === 'lovelace');
+describe('Lovelace extension integration', () => {
+  it('handles status and search command flow', async () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
 
-    const result = await statusCmd?.handler(['status'], mockContext);
-    expect(result).toContain('Lovelace is active');
+    const statusResult = await pi.commands.get('lovelace').handler('status');
+    expect(statusResult).toContain('Lovelace is active.');
+
+    const searchResult = await pi.commands.get('search').handler('auth timeout');
+    expect(searchResult).toContain('[github]');
+    expect(searchResult).toContain('[jira]');
+    expect(searchResult).toContain('[slack]');
   });
 
-  it('should enforce read-only policy across different tool calls', async () => {
-    const extension = new LovelaceExtension();
+  it('enforces read-only policy across tool-call sequence', async () => {
+    const pi = createPiMock();
+    lovelaceExtension(pi);
+
+    const onToolCall = pi.events.get('tool_call');
 
     const sequence = [
-      { tool: 'list_files', args: { path: '.' }, shouldPass: true },
-      { tool: 'write_file', args: { filepath: 'bad.txt', content: 'hack' }, shouldPass: false },
-      { tool: 'read_file', args: { filepath: 'docs/README.md' }, shouldPass: true },
-      { tool: 'run_in_bash_session', args: { command: 'rm -rf /' }, shouldPass: false },
+      { event: { toolName: 'read', input: { path: 'docs/README.md' } }, blocked: false },
+      { event: { toolName: 'write', input: { path: 'bad.txt', content: 'hack' } }, blocked: true },
+      { event: { toolName: 'bash', input: { command: 'ls -la' } }, blocked: false },
+      { event: { toolName: 'bash', input: { command: 'rm -rf /' } }, blocked: true },
     ];
 
     for (const step of sequence) {
-      const call: any = { tool: step.tool, arguments: step.args };
-      if (step.shouldPass) {
-        await expect(extension.tool_call(call, mockContext)).resolves.not.toThrow();
+      const result = await onToolCall(step.event);
+      if (step.blocked) {
+        expect(result).toEqual(expect.objectContaining({ block: true }));
       } else {
-        await expect(extension.tool_call(call, mockContext)).rejects.toThrow();
+        expect(result).toBeUndefined();
       }
     }
   });
