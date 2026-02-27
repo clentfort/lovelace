@@ -6,3 +6,6 @@
 - Extension entry point `extensions/work-agent/index.ts` uses `@mariozechner/pi-agent` types.
 - Tool gate implemented in `index.ts` successfully blocks `write_file`, `delete_file`, `rename_file`, and `run_in_bash_session` in simulation.
 - Local state directories are set up in `/home/jules/.work-agent/`.
+- Unit tests (vitest) implemented for `index.ts` cover command registration and policy enforcement.
+- Integration tests (vitest) simulate basic agent session and multi-step tool interactions.
+- Added `@mariozechner/pi-agent` as a dev dependency to enable proper typing and testing without excessive mocking.

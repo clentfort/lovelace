@@ -1,12 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import WorkAgentExtension from './index';
-
-// Mocking @mariozechner/pi-agent since it might not be available in the environment
-vi.mock('@mariozechner/pi-agent', () => {
-    return {
-        // Any needed exports
-    };
-});
 
 describe('WorkAgentExtension', () => {
   it('should have the correct name and description', () => {
