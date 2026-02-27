@@ -1,12 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
-
-// Mocking @mariozechner/pi-agent for integration test as well
-vi.mock('@mariozechner/pi-agent', () => {
-    return {
-        // Any needed exports
-    };
-});
-
+import { describe, it, expect } from 'vitest';
 import WorkAgentExtension from '../extensions/work-agent/index';
 
 // Simple mock context to simulate agent session
