@@ -9,3 +9,6 @@
 - [ ] Initialize Phase 1: Cross-repo memory + federated search.
     - [x] Build adapter wrappers with deterministic parsing (GitHub, Jira, Slack mocks).
     - [x] Add `/search` command and normalized output.
+    - [ ] Add event log and SQLite persistence for memory.
+    - [ ] Add `/memory add` and `/memory find` commands.
+    - [ ] Add `/repo profile` command.
