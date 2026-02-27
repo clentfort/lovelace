@@ -1,4 +1,4 @@
-# Product Spec: Always-On Engineering Work Agent
+# Product Spec: Always-On Engineering Lovelace
 
 ## 1) Problem statement
 

@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This repository contains the development of the "Always-On Work Agent".
+This repository contains the development of the "Always-On Lovelace".
 
 ## Project Files
 - `tasklog.md`: Keeps track of all tasks performed and their status.
