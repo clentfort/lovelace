@@ -9,3 +9,6 @@
 - Unit tests (vitest) implemented for `index.ts` cover command registration and policy enforcement.
 - Integration tests (vitest) simulate basic agent session and multi-step tool interactions.
 - Added `@mariozechner/pi-agent` as a dev dependency to enable proper typing and testing without excessive mocking.
+- Unified search adapter interface `Adapter` and `SearchResult` defined in `extensions/lovelace/adapters/types.ts`.
+- Mock adapters implemented for GitHub, Jira, and Slack.
+- `/search` command added to `LovelaceExtension` that aggregates results from all adapters.

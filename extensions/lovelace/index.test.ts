@@ -29,6 +29,20 @@ describe('LovelaceExtension', () => {
     expect(result).toContain('Memory: Online');
   });
 
+  it('should return results from /search command', async () => {
+    const extension = new LovelaceExtension();
+    const commands = extension.registerCommands();
+    const searchCommand = commands.find(c => c.name === 'search');
+
+    const context: any = {};
+    const result = await searchCommand?.handler(['incident', 'report'], context);
+
+    expect(result).toContain('[github]');
+    expect(result).toContain('[jira]');
+    expect(result).toContain('[slack]');
+    expect(result).toContain('incident report');
+  });
+
   it('should block mutating tools in tool_call', async () => {
     const extension = new LovelaceExtension();
     const context: any = {};
