@@ -123,10 +123,10 @@
 - [ ] Mark stale memories later if needed
 
 ## Suggested next steps
-1. Better dedupe/merging for scan and command memories
+1. Better dedupe/merging for scan memories
 2. Staleness rules for old memories
 3. Richer task detection and enrichment
-4. Basic tests for extension commands and retrieval
+4. Extension-level tests for commands/retrieval
 5. Optional gitleaks integration if desired later
 
 ## Definition of done for first usable version

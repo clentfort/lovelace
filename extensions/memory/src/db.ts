@@ -352,16 +352,20 @@ export class LovelaceStore {
 		return parseBacklinkStatus(row?.metadataJson);
 	}
 
-	createMemory(input: CreateMemoryInput): MemoryRecord {
-		const normalized = sanitizeFreeformText(input.text);
-		if (!normalized) throw new Error("Refusing to store empty memory");
-		const existing = this.db
+	private findMemory(scope: MemoryScope, text: string, projectId?: string | null, taskId?: string | null): MemoryRecord | undefined {
+		return this.db
 			.prepare(
 				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
 				 FROM memories
 				 WHERE scope = ? AND IFNULL(project_id, '') = IFNULL(?, '') AND IFNULL(task_id, '') = IFNULL(?, '') AND text = ? AND status != 'archived'`,
 			)
-			.get(input.scope, input.projectId ?? null, input.taskId ?? null, normalized) as MemoryRecord | undefined;
+			.get(scope, projectId ?? null, taskId ?? null, text) as MemoryRecord | undefined;
+	}
+
+	createMemory(input: CreateMemoryInput): MemoryRecord {
+		const normalized = sanitizeFreeformText(input.text);
+		if (!normalized) throw new Error("Refusing to store empty memory");
+		const existing = this.findMemory(input.scope, normalized, input.projectId, input.taskId);
 		const now = Date.now();
 		if (existing) {
 			this.db.prepare("UPDATE memories SET updated_at = ?, source = ?, kind = ?, confidence = MAX(confidence, ?) WHERE id = ?").run(now, input.source ?? "manual", input.kind, input.confidence ?? 1, existing.id);
@@ -383,6 +387,29 @@ export class LovelaceStore {
 
 	archiveMemory(id: string): void {
 		this.db.prepare("UPDATE memories SET status = 'archived', updated_at = ? WHERE id = ?").run(Date.now(), id);
+	}
+
+	noteProjectCommandSuccess(projectId: string, command: string): MemoryRecord {
+		const text = sanitizeFreeformText(`A useful working command in this repo is: \`${command.trim()}\``);
+		if (!text) throw new Error("Refusing to store empty command memory");
+		const existing = this.findMemory("project", text, projectId, null);
+		if (!existing) {
+			return this.createMemory({
+				scope: "project",
+				projectId,
+				kind: "command",
+				text,
+				source: "heuristic",
+				confidence: 0.55,
+				status: "candidate",
+			});
+		}
+		const nextConfidence = Math.min(1, existing.confidence + 0.15);
+		const nextStatus = existing.status === "active" || nextConfidence >= 0.85 ? "active" : existing.status;
+		this.db
+			.prepare("UPDATE memories SET confidence = ?, status = ?, updated_at = ? WHERE id = ?")
+			.run(nextConfidence, nextStatus, Date.now(), existing.id);
+		return this.getMemoryById(existing.id)!;
 	}
 
 	getRelevantMemories(projectId?: string | null, taskId?: string | null): MemoryRecord[] {

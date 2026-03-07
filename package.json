@@ -5,8 +5,14 @@
   "type": "module",
   "description": "Personal workflow tooling project; starts with a Pi memory extension.",
   "keywords": ["pi-package"],
+  "scripts": {
+    "test": "tsx tests/memory-store.test.ts"
+  },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",

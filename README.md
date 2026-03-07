@@ -12,3 +12,8 @@ We start with a Pi memory extension.
 ## Current code
 
 - `extensions/memory/src/` — Pi memory extension implementation
+- `tests/memory-store.test.ts` — basic store/relation tests
+
+## Development
+
+- `npm test` — run memory-store tests

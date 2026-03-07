@@ -230,15 +230,7 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		if (!normalized) return;
 		const interesting = /^(pnpm|npm|yarn|make|cargo|pytest|go test|just)\b/.test(normalized);
 		if (!interesting) return;
-		store.createMemory({
-			scope: "project",
-			projectId: state.project.id,
-			kind: "command",
-			text: `A useful working command in this repo is: \`${normalized}\``,
-			source: "heuristic",
-			confidence: 0.55,
-			status: "candidate",
-		});
+		store.noteProjectCommandSuccess(state.project.id, normalized);
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
