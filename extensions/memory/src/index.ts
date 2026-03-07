@@ -4,6 +4,7 @@ import { Text, matchesKey } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { LovelaceStore } from "./db.js";
 import { buildTaskContinuationSummary } from "./continuation.js";
+import { extractTaskRef, parseJiraTaskContext, parsePrContext } from "./parse.js";
 import { detectRepo, type RepoInfo } from "./repo.js";
 import { scanProject } from "./scan.js";
 import type { BacklinkStatus, MemoryKind, MemoryRecord, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
@@ -11,8 +12,6 @@ import { backlinkLabel, formatMemoryBlock, taskStatusText } from "./view.js";
 
 const TASK_ENTRY_TYPE = "lovelace-task";
 const DEFAULT_DB_PATH = join(homedir(), ".lovelace", "memory.db");
-const TASK_REF_REGEX = /\b[A-Z][A-Z0-9]+-\d+\b/g;
-const PR_URL_REGEX = /https?:\/\/github\.com\/[^\s/]+\/[^\s/]+\/pull\/(\d+)/g;
 
 interface RuntimeState {
 	project?: ProjectRecord;
@@ -31,23 +30,6 @@ function toText(content: unknown): string {
 		.join("\n")
 		.trim();
 }
-
-function extractTaskRef(text: string): string | undefined {
-	return text.match(TASK_REF_REGEX)?.[0];
-}
-
-function extractPrInfo(text: string): { prNumber?: number; prUrl?: string } | undefined {
-	const urlMatch = [...text.matchAll(PR_URL_REGEX)][0];
-	if (urlMatch) {
-		return { prNumber: Number(urlMatch[1]), prUrl: urlMatch[0] };
-	}
-	const numberMatch = text.match(/\b(?:PR\s*#?|#)(\d+)\b/i);
-	if (numberMatch) {
-		return { prNumber: Number(numberMatch[1]) };
-	}
-	return undefined;
-}
-
 
 async function showModal(ctx: ExtensionContext, title: string, body: string): Promise<void> {
 	if (!ctx.hasUI) return;
@@ -246,18 +228,21 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		rememberCommand(command);
 
 		if (/\bjira\b/.test(command)) {
-			const taskRef = extractTaskRef(`${command}\n${output}`);
-			if (taskRef) {
-				const title = output.split("\n").map((line) => line.trim()).find(Boolean) ?? null;
-				const task = store.upsertTask({ ref: taskRef, sourceType: "jira", title, status: "active" });
-				if (!state.currentTask || state.currentTask.ref === taskRef) setCurrentTask(ctx, task);
+			const taskInfo = parseJiraTaskContext(`${command}\n${output}`);
+			if (taskInfo?.ref) {
+				const task = store.upsertTask({ ref: taskInfo.ref, sourceType: "jira", title: taskInfo.title, summary: taskInfo.title, status: "active" });
+				if (!state.currentTask || state.currentTask.ref === taskInfo.ref) setCurrentTask(ctx, task);
 			}
 		}
 
 		if (/\bgh\s+pr\b/.test(command) || output.includes("/pull/")) {
-			const prInfo = extractPrInfo(`${command}\n${output}`);
+			const prInfo = parsePrContext(`${command}\n${output}`);
 			if (prInfo && state.project) {
-				const pr = store.upsertPr({ projectId: state.project.id, prNumber: prInfo.prNumber, prUrl: prInfo.prUrl });
+				if (!state.currentTask && prInfo.taskRef) {
+					const inferredTask = store.upsertTask({ ref: prInfo.taskRef, sourceType: "manual", title: prInfo.title, summary: prInfo.title, status: "active" });
+					setCurrentTask(ctx, inferredTask);
+				}
+				const pr = store.upsertPr({ projectId: state.project.id, prNumber: prInfo.prNumber, prUrl: prInfo.prUrl, title: prInfo.title });
 				linkPrToCurrentContext(pr);
 				if (/\bgh\s+pr\s+comment\b/.test(command) && state.currentTask && `${command}\n${output}`.includes(state.currentTask.ref)) {
 					updateBacklinkStatus("pr-linked-to-task");

@@ -124,11 +124,11 @@
 - [x] Basic stale-memory labeling in retrieval
 
 ## Suggested next steps
-1. Richer task detection and enrichment
-2. Extension-level tests for commands/retrieval
-3. More task utilities (for example recent task selection)
-4. Optional gitleaks integration if desired later
-5. Future dashboard integration work
+1. Extension-level tests for commands/retrieval
+2. More task utilities (for example recent task selection)
+3. Optional gitleaks integration if desired later
+4. Future dashboard integration work
+5. Better task/PR UI flows
 
 ## Definition of done for first usable version
 - [x] Starting Pi in a repo registers project + Pi session
