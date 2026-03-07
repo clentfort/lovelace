@@ -79,7 +79,7 @@
 
 ## Phase 9 — Heuristic extraction
 - [x] Detect task refs from prompt text
-- [ ] Detect task refs from branch name
+- [x] Detect task refs from branch name
 - [x] Detect task refs from `jira` CLI usage/output
 - [x] Detect PR refs from `gh pr` usage/output
 - [x] Detect repeated successful commands
@@ -112,7 +112,7 @@
 ## Phase 13 — Safety / noise control
 - [x] Do not store raw command output wholesale
 - [x] Do not store large file contents
-- [ ] Do not store secrets/token-like strings
+- [x] Do not store secrets/token-like strings
 - [x] Prefer candidates over auto-promoting weak inferences
 - [x] Keep retrieval small
 
@@ -123,11 +123,11 @@
 - [ ] Mark stale memories later if needed
 
 ## Suggested next steps
-1. Task detection from branch name
-2. Secret/token scrubbing before saving memory
-3. Backlink status tracking for task ↔ PR
-4. Better dedupe/merging for scan and command memories
-5. Staleness rules for old memories
+1. Better dedupe/merging for scan and command memories
+2. Staleness rules for old memories
+3. Richer task detection and enrichment
+4. Basic tests for extension commands and retrieval
+5. Optional gitleaks integration if desired later
 
 ## Definition of done for first usable version
 - [x] Starting Pi in a repo registers project + Pi session

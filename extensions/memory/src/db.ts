@@ -2,7 +2,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
-import type { MemoryKind, MemoryRecord, MemoryScope, MemorySource, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord, TaskSourceType } from "./types.js";
+import { sanitizeFreeformText } from "./sanitize.js";
+import type { BacklinkStatus, MemoryKind, MemoryRecord, MemoryScope, MemorySource, PiSessionRecord, PrRecord, ProjectRecord, TaskPrLinkRecord, TaskRecord, TaskSourceType } from "./types.js";
 
 export interface UpsertProjectInput {
 	name: string;
@@ -41,6 +42,24 @@ export interface CreateMemoryInput {
 	confidence?: number;
 	status?: MemoryRecord["status"];
 	source?: MemorySource;
+}
+
+function mergeBacklinkStatus(current: BacklinkStatus, next: BacklinkStatus): BacklinkStatus {
+	if (current === "both" || next === "both") return "both";
+	if (current === "unknown") return next;
+	if (next === "unknown") return current;
+	if (current !== next) return "both";
+	return current;
+}
+
+function parseBacklinkStatus(metadataJson: string | null | undefined): BacklinkStatus {
+	if (!metadataJson) return "unknown";
+	try {
+		const parsed = JSON.parse(metadataJson) as { backlinkStatus?: BacklinkStatus };
+		return parsed.backlinkStatus ?? "unknown";
+	} catch {
+		return "unknown";
+	}
 }
 
 export class LovelaceStore {
@@ -173,6 +192,8 @@ export class LovelaceStore {
 
 	upsertTask(input: UpsertTaskInput): TaskRecord {
 		const now = Date.now();
+		const sanitizedTitle = sanitizeFreeformText(input.title);
+		const sanitizedSummary = sanitizeFreeformText(input.summary);
 		const existing = this.getTaskByRef(input.ref);
 		if (existing) {
 			this.db
@@ -186,7 +207,7 @@ export class LovelaceStore {
 					     last_seen_at = ?
 					 WHERE id = ?`,
 				)
-				.run(input.sourceType ?? null, input.title ?? null, input.summary ?? null, input.status ?? null, now, now, existing.id);
+				.run(input.sourceType ?? null, sanitizedTitle, sanitizedSummary, input.status ?? null, now, now, existing.id);
 			return this.getTaskById(existing.id)!;
 		}
 
@@ -196,7 +217,7 @@ export class LovelaceStore {
 				`INSERT INTO tasks (id, ref, source_type, title, summary, status, created_at, updated_at, last_seen_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			)
-			.run(id, input.ref, input.sourceType ?? "manual", input.title ?? null, input.summary ?? null, input.status ?? "active", now, now, now);
+			.run(id, input.ref, input.sourceType ?? "manual", sanitizedTitle, sanitizedSummary, input.status ?? "active", now, now, now);
 		return this.getTaskById(id)!;
 	}
 
@@ -264,6 +285,7 @@ export class LovelaceStore {
 
 	upsertPr(input: UpsertPrInput): PrRecord {
 		const now = Date.now();
+		const sanitizedTitle = sanitizeFreeformText(input.title);
 		let existing: PrRecord | undefined;
 		if (input.prUrl) {
 			existing = this.db.prepare("SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE pr_url = ?").get(input.prUrl) as PrRecord | undefined;
@@ -278,7 +300,7 @@ export class LovelaceStore {
 					 SET pr_number = COALESCE(?, pr_number), pr_url = COALESCE(?, pr_url), title = COALESCE(?, title), updated_at = ?
 					 WHERE id = ?`,
 				)
-				.run(input.prNumber ?? null, input.prUrl ?? null, input.title ?? null, now, existing.id);
+				.run(input.prNumber ?? null, input.prUrl ?? null, sanitizedTitle, now, existing.id);
 			return this.getPrById(existing.id)!;
 		}
 		const id = randomUUID();
@@ -287,7 +309,7 @@ export class LovelaceStore {
 				`INSERT INTO prs (id, project_id, pr_number, pr_url, title, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			)
-			.run(id, input.projectId, input.prNumber ?? null, input.prUrl ?? null, input.title ?? null, now, now);
+			.run(id, input.projectId, input.prNumber ?? null, input.prUrl ?? null, sanitizedTitle, now, now);
 		return this.getPrById(id)!;
 	}
 
@@ -300,13 +322,39 @@ export class LovelaceStore {
 			.prepare(
 				`INSERT INTO edges (id, from_type, from_id, edge_type, to_type, to_id, metadata_json, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(from_type, from_id, edge_type, to_type, to_id) DO NOTHING`,
+				 ON CONFLICT(from_type, from_id, edge_type, to_type, to_id)
+				 DO UPDATE SET metadata_json = COALESCE(excluded.metadata_json, edges.metadata_json)`,
 			)
 			.run(randomUUID(), fromType, fromId, edgeType, toType, toId, metadataJson ?? null, Date.now());
 	}
 
+	upsertTaskPrLink(prId: string, taskId: string, backlinkStatus: BacklinkStatus = "unknown"): BacklinkStatus {
+		const existing = this.db
+			.prepare(
+				`SELECT metadata_json as metadataJson
+				 FROM edges
+				 WHERE from_type = 'pr' AND from_id = ? AND edge_type = 'relates_to' AND to_type = 'task' AND to_id = ?`,
+			)
+			.get(prId, taskId) as { metadataJson: string | null } | undefined;
+		const merged = mergeBacklinkStatus(parseBacklinkStatus(existing?.metadataJson), backlinkStatus);
+		this.createEdge("pr", prId, "relates_to", "task", taskId, JSON.stringify({ backlinkStatus: merged }));
+		return merged;
+	}
+
+	getTaskPrLink(prId: string, taskId: string): BacklinkStatus {
+		const row = this.db
+			.prepare(
+				`SELECT metadata_json as metadataJson
+				 FROM edges
+				 WHERE from_type = 'pr' AND from_id = ? AND edge_type = 'relates_to' AND to_type = 'task' AND to_id = ?`,
+			)
+			.get(prId, taskId) as { metadataJson: string | null } | undefined;
+		return parseBacklinkStatus(row?.metadataJson);
+	}
+
 	createMemory(input: CreateMemoryInput): MemoryRecord {
-		const normalized = input.text.trim();
+		const normalized = sanitizeFreeformText(input.text);
+		if (!normalized) throw new Error("Refusing to store empty memory");
 		const existing = this.db
 			.prepare(
 				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
@@ -365,14 +413,19 @@ export class LovelaceStore {
 		this.db.prepare(`UPDATE memories SET last_used_at = ? WHERE id IN (${placeholders})`).run(Date.now(), ...ids);
 	}
 
-	listPrsForTask(taskId: string): PrRecord[] {
-		return this.db
+	listPrsForTask(taskId: string): TaskPrLinkRecord[] {
+		const rows = this.db
 			.prepare(
-				`SELECT p.id, p.project_id as projectId, p.pr_number as prNumber, p.pr_url as prUrl, p.title, p.created_at as createdAt, p.updated_at as updatedAt
+				`SELECT p.id, p.project_id as projectId, p.pr_number as prNumber, p.pr_url as prUrl, p.title, p.created_at as createdAt, p.updated_at as updatedAt,
+				        e.metadata_json as metadataJson
 				 FROM prs p
 				 JOIN edges e ON e.from_type = 'pr' AND e.from_id = p.id AND e.edge_type = 'relates_to' AND e.to_type = 'task' AND e.to_id = ?
 				 ORDER BY p.updated_at DESC`,
 			)
-			.all(taskId) as PrRecord[];
+			.all(taskId) as Array<PrRecord & { metadataJson: string | null }>;
+		return rows.map(({ metadataJson, ...pr }) => ({
+			pr,
+			backlinkStatus: parseBacklinkStatus(metadataJson),
+		}));
 	}
 }

@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 import { LovelaceStore } from "./db.js";
 import { detectRepo, type RepoInfo } from "./repo.js";
 import { scanProject } from "./scan.js";
-import type { MemoryKind, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
+import type { BacklinkStatus, MemoryKind, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
 
 const TASK_ENTRY_TYPE = "lovelace-task";
 const DEFAULT_DB_PATH = join(homedir(), ".lovelace", "memory.db");
@@ -18,6 +18,7 @@ interface RuntimeState {
 	piSession?: PiSessionRecord;
 	currentTask?: TaskRecord;
 	currentPr?: PrRecord;
+	currentBacklinkStatus?: BacklinkStatus;
 }
 
 function toText(content: unknown): string {
@@ -45,10 +46,24 @@ function extractPrInfo(text: string): { prNumber?: number; prUrl?: string } | un
 	return undefined;
 }
 
-function taskStatusText(task?: TaskRecord, pr?: PrRecord): string | undefined {
+function backlinkLabel(status?: BacklinkStatus): string {
+	switch (status) {
+		case "task-linked-to-pr":
+			return "task→pr";
+		case "pr-linked-to-task":
+			return "pr→task";
+		case "both":
+			return "both-links";
+		default:
+			return "link?";
+	}
+}
+
+function taskStatusText(task?: TaskRecord, pr?: PrRecord, backlinkStatus?: BacklinkStatus): string | undefined {
 	if (!task) return undefined;
 	const prPart = pr?.prNumber != null ? ` · PR #${pr.prNumber}` : pr?.prUrl ? ` · ${pr.prUrl}` : "";
-	return `task: ${task.ref}${prPart}`;
+	const backlinkPart = pr ? ` · ${backlinkLabel(backlinkStatus)}` : "";
+	return `task: ${task.ref}${prPart}${backlinkPart}`;
 }
 
 async function showModal(ctx: ExtensionContext, title: string, body: string): Promise<void> {
@@ -67,7 +82,7 @@ async function showModal(ctx: ExtensionContext, title: string, body: string): Pr
 	});
 }
 
-function formatMemoryBlock(memories: Array<{ scope: string; text: string }>, task?: TaskRecord, pr?: PrRecord): string | undefined {
+function formatMemoryBlock(memories: Array<{ scope: string; text: string }>, task?: TaskRecord, pr?: PrRecord, backlinkStatus?: BacklinkStatus): string | undefined {
 	const user = memories.filter((m) => m.scope === "user").slice(0, 3);
 	const project = memories.filter((m) => m.scope === "project").slice(0, 5);
 	const domain = memories.filter((m) => m.scope === "domain").slice(0, 3);
@@ -81,6 +96,7 @@ function formatMemoryBlock(memories: Array<{ scope: string; text: string }>, tas
 		if (task) taskLines.push(`- Current task: ${task.ref}${task.title ? ` — ${task.title}` : ""}`);
 		if (pr?.prNumber != null) taskLines.push(`- Linked PR: #${pr.prNumber}`);
 		else if (pr?.prUrl) taskLines.push(`- Linked PR: ${pr.prUrl}`);
+		if (pr) taskLines.push(`- Backlink status: ${backlinkLabel(backlinkStatus)}`);
 		for (const note of taskNotes) taskLines.push(`- ${note.text}`);
 		sections.push(`[Task/session context]\n${taskLines.join("\n")}`);
 	}
@@ -131,14 +147,16 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 	}
 
 	function updateStatus(ctx: ExtensionContext) {
-		ctx.ui.setStatus("lovelace-task", taskStatusText(state.currentTask, state.currentPr));
+		ctx.ui.setStatus("lovelace-task", taskStatusText(state.currentTask, state.currentPr, state.currentBacklinkStatus));
 	}
 
 	async function registerCurrentSession(ctx: ExtensionContext) {
 		if (!state.project) return;
 		const restoredTask = restoreTaskFromBranch(ctx) ?? store.findTaskForSession(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile());
 		state.currentTask = restoredTask;
-		state.currentPr = restoredTask ? store.listPrsForTask(restoredTask.id)[0] : undefined;
+		const currentLink = restoredTask ? store.listPrsForTask(restoredTask.id)[0] : undefined;
+		state.currentPr = currentLink?.pr;
+		state.currentBacklinkStatus = currentLink?.backlinkStatus;
 		state.piSession = store.upsertPiSession({
 			piSessionId: ctx.sessionManager.getSessionId(),
 			sessionFile: ctx.sessionManager.getSessionFile(),
@@ -154,12 +172,20 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 	async function refreshContext(ctx: ExtensionContext) {
 		await detectAndRegisterProject(ctx);
 		await registerCurrentSession(ctx);
+		if (!state.currentTask && state.repo?.branch) {
+			await detectTaskFromText(ctx, state.repo.branch, "manual");
+		}
 		updateStatus(ctx);
 	}
 
 	function setCurrentTask(ctx: ExtensionContext, task: TaskRecord | undefined) {
 		state.currentTask = task;
-		state.currentPr = task ? store.listPrsForTask(task.id)[0] : undefined;
+		const currentLink = task ? store.listPrsForTask(task.id)[0] : undefined;
+		state.currentPr = currentLink?.pr ?? state.currentPr;
+		state.currentBacklinkStatus = currentLink?.backlinkStatus;
+		if (state.currentPr && task) {
+			state.currentBacklinkStatus = store.upsertTaskPrLink(state.currentPr.id, task.id, "unknown");
+		}
 		if (state.piSession) {
 			store.setTaskForSession(state.piSession.id, task?.id ?? null);
 			if (task) store.createEdge("session", state.piSession.id, "for_task", "task", task.id);
@@ -170,7 +196,9 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 
 	function linkPrToCurrentContext(pr: PrRecord) {
 		state.currentPr = pr;
-		if (state.currentTask) store.createEdge("pr", pr.id, "relates_to", "task", state.currentTask.id);
+		if (state.currentTask) {
+			state.currentBacklinkStatus = store.upsertTaskPrLink(pr.id, state.currentTask.id, "unknown");
+		}
 		if (state.piSession) store.createEdge("pr", pr.id, "created_from", "session", state.piSession.id);
 	}
 
@@ -180,6 +208,20 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		if (!ref) return;
 		const task = store.upsertTask({ ref, sourceType, status: "active" });
 		setCurrentTask(ctx, task);
+	}
+
+	function currentPrMentioned(text: string): boolean {
+		if (!state.currentPr) return false;
+		if (state.currentPr.prUrl && text.includes(state.currentPr.prUrl)) return true;
+		if (state.currentPr.prNumber != null && (text.includes(`#${state.currentPr.prNumber}`) || text.includes(`/pull/${state.currentPr.prNumber}`))) {
+			return true;
+		}
+		return false;
+	}
+
+	function updateBacklinkStatus(status: BacklinkStatus) {
+		if (!state.currentTask || !state.currentPr) return;
+		state.currentBacklinkStatus = store.upsertTaskPrLink(state.currentPr.id, state.currentTask.id, status);
 	}
 
 	function rememberCommand(command: string) {
@@ -220,7 +262,7 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		const memories = store.getRelevantMemories(state.project?.id, state.currentTask?.id);
 		if (memories.length === 0 && !state.currentTask && !state.currentPr) return;
 		store.markMemoriesUsed(memories.map((memory) => memory.id));
-		const memoryBlock = formatMemoryBlock(memories, state.currentTask, state.currentPr);
+		const memoryBlock = formatMemoryBlock(memories, state.currentTask, state.currentPr, state.currentBacklinkStatus);
 		if (!memoryBlock) return;
 		return {
 			systemPrompt: `${event.systemPrompt}\n\n${memoryBlock}`,
@@ -249,8 +291,16 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 			if (prInfo && state.project) {
 				const pr = store.upsertPr({ projectId: state.project.id, prNumber: prInfo.prNumber, prUrl: prInfo.prUrl });
 				linkPrToCurrentContext(pr);
+				if (/\bgh\s+pr\s+comment\b/.test(command) && state.currentTask && `${command}\n${output}`.includes(state.currentTask.ref)) {
+					updateBacklinkStatus("pr-linked-to-task");
+				}
 				updateStatus(ctx);
 			}
+		}
+
+		if (/\bjira\b.*\bcomment\b/.test(command) && currentPrMentioned(`${command}\n${output}`)) {
+			updateBacklinkStatus("task-linked-to-pr");
+			updateStatus(ctx);
 		}
 	});
 
@@ -259,13 +309,14 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const trimmed = (args ?? "").trim();
 			if (!trimmed || trimmed === "show") {
-				const prs = state.currentTask ? store.listPrsForTask(state.currentTask.id) : [];
+				const prLink = state.currentTask ? store.listPrsForTask(state.currentTask.id)[0] : undefined;
 				const lines = [
 					`Project: ${state.project?.name ?? "unknown"}`,
 					`Task: ${state.currentTask ? state.currentTask.ref : "none"}`,
 				];
 				if (state.currentTask?.title) lines.push(`Title: ${state.currentTask.title}`);
-				if (prs[0]) lines.push(`Linked PR: ${prs[0].prNumber != null ? `#${prs[0].prNumber}` : prs[0].prUrl}`);
+				if (prLink) lines.push(`Linked PR: ${prLink.pr.prNumber != null ? `#${prLink.pr.prNumber}` : prLink.pr.prUrl}`);
+				if (prLink) lines.push(`Backlink: ${backlinkLabel(prLink.backlinkStatus)}`);
 				await showModal(ctx, "Lovelace task", lines.join("\n"));
 				return;
 			}
@@ -283,15 +334,39 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("pr", {
-		description: "Link a PR to the current task/session",
+		description: "Link a PR, show it, or update backlink status",
 		handler: async (args, ctx) => {
+			const input = (args ?? "").trim();
+			if (input === "show") {
+				const text = state.currentPr
+					? [`PR: ${state.currentPr.prNumber != null ? `#${state.currentPr.prNumber}` : state.currentPr.prUrl ?? "unknown"}`, `Backlink: ${backlinkLabel(state.currentBacklinkStatus)}`].join("\n")
+					: "No linked PR";
+				await showModal(ctx, "Lovelace PR", text);
+				return;
+			}
+			const backlinkMatch = input.match(/^backlink\s+(task|pr|both|unknown)$/);
+			if (backlinkMatch) {
+				if (!state.currentTask || !state.currentPr) {
+					ctx.ui.notify("Need a current task and PR first", "warning");
+					return;
+				}
+				const statusMap: Record<string, BacklinkStatus> = {
+					task: "task-linked-to-pr",
+					pr: "pr-linked-to-task",
+					both: "both",
+					unknown: "unknown",
+				};
+				updateBacklinkStatus(statusMap[backlinkMatch[1]]);
+				updateStatus(ctx);
+				ctx.ui.notify(`Backlink status set to ${backlinkLabel(state.currentBacklinkStatus)}`, "info");
+				return;
+			}
 			if (!state.project) {
 				ctx.ui.notify("No active project detected", "error");
 				return;
 			}
-			const input = (args ?? "").trim();
 			if (!input) {
-				ctx.ui.notify("Usage: /pr <number|url>", "warning");
+				ctx.ui.notify("Usage: /pr <number|url> | /pr show | /pr backlink <task|pr|both|unknown>", "warning");
 				return;
 			}
 			const parsed = extractPrInfo(input);

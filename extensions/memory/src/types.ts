@@ -10,6 +10,7 @@ export type MemoryKind =
 export type MemoryStatus = "candidate" | "active" | "archived";
 export type MemorySource = "manual" | "heuristic" | "scan" | "llm";
 export type TaskSourceType = "jira" | "slack" | "mail" | "manual";
+export type BacklinkStatus = "unknown" | "task-linked-to-pr" | "pr-linked-to-task" | "both";
 
 export interface ProjectRecord {
 	id: string;
@@ -76,4 +77,9 @@ export interface EdgeRecord {
 	toId: string;
 	metadataJson: string | null;
 	createdAt: number;
+}
+
+export interface TaskPrLinkRecord {
+	pr: PrRecord;
+	backlinkStatus: BacklinkStatus;
 }
