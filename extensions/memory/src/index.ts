@@ -6,7 +6,8 @@ import { LovelaceStore } from "./db.js";
 import { buildTaskContinuationSummary } from "./continuation.js";
 import { detectRepo, type RepoInfo } from "./repo.js";
 import { scanProject } from "./scan.js";
-import type { BacklinkStatus, MemoryKind, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
+import type { BacklinkStatus, MemoryKind, MemoryRecord, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
+import { backlinkLabel, formatMemoryBlock, taskStatusText } from "./view.js";
 
 const TASK_ENTRY_TYPE = "lovelace-task";
 const DEFAULT_DB_PATH = join(homedir(), ".lovelace", "memory.db");
@@ -47,25 +48,6 @@ function extractPrInfo(text: string): { prNumber?: number; prUrl?: string } | un
 	return undefined;
 }
 
-function backlinkLabel(status?: BacklinkStatus): string {
-	switch (status) {
-		case "task-linked-to-pr":
-			return "task→pr";
-		case "pr-linked-to-task":
-			return "pr→task";
-		case "both":
-			return "both-links";
-		default:
-			return "link?";
-	}
-}
-
-function taskStatusText(task?: TaskRecord, pr?: PrRecord, backlinkStatus?: BacklinkStatus): string | undefined {
-	if (!task) return undefined;
-	const prPart = pr?.prNumber != null ? ` · PR #${pr.prNumber}` : pr?.prUrl ? ` · ${pr.prUrl}` : "";
-	const backlinkPart = pr ? ` · ${backlinkLabel(backlinkStatus)}` : "";
-	return `task: ${task.ref}${prPart}${backlinkPart}`;
-}
 
 async function showModal(ctx: ExtensionContext, title: string, body: string): Promise<void> {
 	if (!ctx.hasUI) return;
@@ -83,27 +65,6 @@ async function showModal(ctx: ExtensionContext, title: string, body: string): Pr
 	});
 }
 
-function formatMemoryBlock(memories: Array<{ scope: string; text: string }>, task?: TaskRecord, pr?: PrRecord, backlinkStatus?: BacklinkStatus): string | undefined {
-	const user = memories.filter((m) => m.scope === "user").slice(0, 3);
-	const project = memories.filter((m) => m.scope === "project").slice(0, 5);
-	const domain = memories.filter((m) => m.scope === "domain").slice(0, 3);
-	const taskNotes = memories.filter((m) => m.scope === "task").slice(0, 3);
-	const sections: string[] = [];
-	if (user.length) sections.push(`[User preferences]\n${user.map((m) => `- ${m.text}`).join("\n")}`);
-	if (project.length) sections.push(`[Project memory]\n${project.map((m) => `- ${m.text}`).join("\n")}`);
-	if (domain.length) sections.push(`[Domain memory]\n${domain.map((m) => `- ${m.text}`).join("\n")}`);
-	if (task || taskNotes.length || pr) {
-		const taskLines: string[] = [];
-		if (task) taskLines.push(`- Current task: ${task.ref}${task.title ? ` — ${task.title}` : ""}`);
-		if (pr?.prNumber != null) taskLines.push(`- Linked PR: #${pr.prNumber}`);
-		else if (pr?.prUrl) taskLines.push(`- Linked PR: ${pr.prUrl}`);
-		if (pr) taskLines.push(`- Backlink status: ${backlinkLabel(backlinkStatus)}`);
-		for (const note of taskNotes) taskLines.push(`- ${note.text}`);
-		sections.push(`[Task/session context]\n${taskLines.join("\n")}`);
-	}
-	if (sections.length === 0) return undefined;
-	return `Relevant Lovelace memory:\n\n${sections.join("\n\n")}\n\nTreat memory as helpful but potentially stale. Verify important facts with tools.`;
-}
 
 function parseRememberArgs(args: string): { scope: MemoryScope; text: string } | undefined {
 	const trimmed = args.trim();

@@ -12,7 +12,7 @@ We start with a Pi memory extension.
 ## Current code
 
 - `extensions/memory/src/` — Pi memory extension implementation
-- `tests/` — basic store and continuation summary tests
+- `tests/` — store, continuation, scan, and view tests
 - `/task recent` — show recently linked tasks for the current project
 
 ## Development

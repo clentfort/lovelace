@@ -120,15 +120,15 @@
 - [x] Status line/widget for current task
 - [x] Better `/memory` display
 - [x] Compaction-aware task continuation summaries
-- [ ] Better deduplication/merge for similar memories
-- [ ] Mark stale memories later if needed
+- [x] Better deduplication/merge for scan memories
+- [x] Basic stale-memory labeling in retrieval
 
 ## Suggested next steps
-1. Better dedupe/merging for scan memories
-2. Staleness rules for old memories
-3. Richer task detection and enrichment
-4. Extension-level tests for commands/retrieval
-5. More task utilities (for example recent task selection)
+1. Richer task detection and enrichment
+2. Extension-level tests for commands/retrieval
+3. More task utilities (for example recent task selection)
+4. Optional gitleaks integration if desired later
+5. Future dashboard integration work
 
 ## Definition of done for first usable version
 - [x] Starting Pi in a repo registers project + Pi session

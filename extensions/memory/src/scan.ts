@@ -2,8 +2,15 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { LovelaceStore } from "./db.js";
 
+function addFact(created: string[], seen: Set<string>, text: string | null | undefined, create: () => string) {
+	if (!text || seen.has(text)) return;
+	seen.add(text);
+	created.push(create());
+}
+
 export function scanProject(store: LovelaceStore, projectId: string, rootPath: string): string[] {
 	const created: string[] = [];
+	const seen = new Set<string>();
 
 	const packageJsonPath = join(rootPath, "package.json");
 	const pnpmWorkspacePath = join(rootPath, "pnpm-workspace.yaml");
@@ -11,94 +18,135 @@ export function scanProject(store: LovelaceStore, projectId: string, rootPath: s
 	const pyprojectPath = join(rootPath, "pyproject.toml");
 	const makefilePath = join(rootPath, "Makefile");
 
+	let usesPnpm = false;
+	let hasWorkspace = false;
 	if (existsSync(packageJsonPath)) {
 		try {
 			const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { packageManager?: string; workspaces?: unknown };
-			if (pkg.packageManager?.startsWith("pnpm")) {
-				created.push(store.createMemory({
+			usesPnpm = Boolean(pkg.packageManager?.startsWith("pnpm"));
+			hasWorkspace = Array.isArray(pkg.workspaces) || typeof pkg.workspaces === "object";
+		} catch {
+			// Ignore invalid package.json for now.
+		}
+	}
+	if (existsSync(pnpmWorkspacePath)) {
+		usesPnpm = true;
+		hasWorkspace = true;
+	}
+
+	if (usesPnpm && hasWorkspace) {
+		addFact(created, seen, "This repo uses pnpm and has workspace configuration.", () =>
+			store.createMemory({
+				scope: "project",
+				projectId,
+				kind: "command",
+				text: "This repo uses pnpm and has workspace configuration.",
+				source: "scan",
+				confidence: 0.95,
+			}).text,
+		);
+	} else {
+		if (usesPnpm) {
+			addFact(created, seen, "This repo uses pnpm.", () =>
+				store.createMemory({
 					scope: "project",
 					projectId,
 					kind: "command",
 					text: "This repo uses pnpm.",
 					source: "scan",
 					confidence: 0.95,
-				}).text);
-			}
-			if (Array.isArray(pkg.workspaces) || typeof pkg.workspaces === "object") {
-				created.push(store.createMemory({
+				}).text,
+			);
+		}
+		if (hasWorkspace) {
+			addFact(created, seen, "This repo appears to be a JavaScript/TypeScript workspace or monorepo.", () =>
+				store.createMemory({
 					scope: "project",
 					projectId,
 					kind: "structure",
 					text: "This repo appears to be a JavaScript/TypeScript workspace or monorepo.",
 					source: "scan",
 					confidence: 0.85,
-				}).text);
-			}
-		} catch {
-			// Ignore invalid package.json for now.
+				}).text,
+			);
 		}
-	}
-
-	if (existsSync(pnpmWorkspacePath)) {
-		created.push(store.createMemory({
-			scope: "project",
-			projectId,
-			kind: "structure",
-			text: "This repo has a pnpm workspace configuration.",
-			source: "scan",
-			confidence: 0.95,
-		}).text);
 	}
 
 	if (existsSync(cargoTomlPath)) {
-		created.push(store.createMemory({
-			scope: "project",
-			projectId,
-			kind: "structure",
-			text: "This repo has Rust/Cargo configuration.",
-			source: "scan",
-			confidence: 0.9,
-		}).text);
+		addFact(created, seen, "This repo has Rust/Cargo configuration.", () =>
+			store.createMemory({
+				scope: "project",
+				projectId,
+				kind: "structure",
+				text: "This repo has Rust/Cargo configuration.",
+				source: "scan",
+				confidence: 0.9,
+			}).text,
+		);
 	}
 
 	if (existsSync(pyprojectPath)) {
-		created.push(store.createMemory({
-			scope: "project",
-			projectId,
-			kind: "structure",
-			text: "This repo has Python pyproject configuration.",
-			source: "scan",
-			confidence: 0.9,
-		}).text);
+		addFact(created, seen, "This repo has Python pyproject configuration.", () =>
+			store.createMemory({
+				scope: "project",
+				projectId,
+				kind: "structure",
+				text: "This repo has Python pyproject configuration.",
+				source: "scan",
+				confidence: 0.9,
+			}).text,
+		);
 	}
 
 	if (existsSync(makefilePath)) {
-		created.push(store.createMemory({
-			scope: "project",
-			projectId,
-			kind: "command",
-			text: "This repo has a Makefile; common tasks may be exposed there.",
-			source: "scan",
-			confidence: 0.8,
-		}).text);
+		addFact(created, seen, "This repo has a Makefile; common tasks may be exposed there.", () =>
+			store.createMemory({
+				scope: "project",
+				projectId,
+				kind: "command",
+				text: "This repo has a Makefile; common tasks may be exposed there.",
+				source: "scan",
+				confidence: 0.8,
+			}).text,
+		);
 	}
 
+	const generatedDirs: string[] = [];
+	let hasInfrastructureDir = false;
 	for (const candidate of ["src/generated", "generated", "_infrastructure"]) {
 		const fullPath = join(rootPath, candidate);
 		if (existsSync(fullPath) && statSync(fullPath).isDirectory()) {
-			const text =
-				candidate === "_infrastructure"
-					? "This repo has an `_infrastructure` directory."
-					: `This repo has a likely generated-code directory at \`${candidate}\`.`;
-			created.push(store.createMemory({
+			if (candidate === "_infrastructure") hasInfrastructureDir = true;
+			else generatedDirs.push(candidate);
+		}
+	}
+	if (generatedDirs.length > 0) {
+		const generatedText =
+			generatedDirs.length === 1
+				? `This repo has a likely generated-code directory at \`${generatedDirs[0]}\`.`
+				: `This repo has likely generated-code directories at ${generatedDirs.map((dir) => `\`${dir}\``).join(", ")}.`;
+		addFact(created, seen, generatedText, () =>
+			store.createMemory({
 				scope: "project",
 				projectId,
-				kind: candidate === "_infrastructure" ? "structure" : "constraint",
-				text,
+				kind: "constraint",
+				text: generatedText,
 				source: "scan",
 				confidence: 0.75,
-			}).text);
-		}
+			}).text,
+		);
+	}
+	if (hasInfrastructureDir) {
+		addFact(created, seen, "This repo has an `_infrastructure` directory.", () =>
+			store.createMemory({
+				scope: "project",
+				projectId,
+				kind: "structure",
+				text: "This repo has an `_infrastructure` directory.",
+				source: "scan",
+				confidence: 0.75,
+			}).text,
+		);
 	}
 
 	try {
@@ -112,17 +160,21 @@ export function scanProject(store: LovelaceStore, projectId: string, rootPath: s
 					return false;
 				}
 			})
-			.slice(0, 8)
-			.map(({ entry }) => entry);
+			.map(({ entry }) => entry)
+			.filter((entry) => !["generated", "_infrastructure"].includes(entry))
+			.slice(0, 8);
 		if (dirs.length > 0) {
-			created.push(store.createMemory({
-				scope: "project",
-				projectId,
-				kind: "structure",
-				text: `Top-level directories include: ${dirs.join(", ")}.`,
-				source: "scan",
-				confidence: 0.6,
-			}).text);
+			const dirsText = `Top-level directories include: ${dirs.join(", ")}.`;
+			addFact(created, seen, dirsText, () =>
+				store.createMemory({
+					scope: "project",
+					projectId,
+					kind: "structure",
+					text: dirsText,
+					source: "scan",
+					confidence: 0.6,
+				}).text,
+			);
 		}
 	} catch {
 		// Ignore scan failures.
