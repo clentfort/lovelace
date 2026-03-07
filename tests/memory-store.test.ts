@@ -48,6 +48,11 @@ try {
 	assert.equal(links[0].backlinkStatus, "both");
 	assert.equal(links[0].pr.prNumber, 123);
 
+	const continuation1 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Keep going");
+	const continuation2 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Latest focus changed");
+	assert.equal(continuation1.id, continuation2.id);
+	assert.match(continuation2.text, /Latest focus changed/);
+
 	console.log("memory-store tests passed");
 } finally {
 	store.close();

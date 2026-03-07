@@ -119,6 +119,7 @@
 ## Phase 14 — Nice v1 polish
 - [x] Status line/widget for current task
 - [x] Better `/memory` display
+- [x] Compaction-aware task continuation summaries
 - [ ] Better deduplication/merge for similar memories
 - [ ] Mark stale memories later if needed
 

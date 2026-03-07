@@ -412,6 +412,35 @@ export class LovelaceStore {
 		return this.getMemoryById(existing.id)!;
 	}
 
+	upsertTaskContinuationSummary(taskId: string, summary: string): MemoryRecord {
+		const text = sanitizeFreeformText(summary);
+		if (!text) throw new Error("Refusing to store empty continuation summary");
+		const existing = this.db
+			.prepare(
+				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
+				 FROM memories
+				 WHERE scope = 'task' AND task_id = ? AND kind = 'note' AND source = 'heuristic' AND text LIKE 'Continuation summary for %'
+				 ORDER BY updated_at DESC
+				 LIMIT 1`,
+			)
+			.get(taskId) as MemoryRecord | undefined;
+		if (!existing) {
+			return this.createMemory({
+				scope: "task",
+				taskId,
+				kind: "note",
+				text,
+				source: "heuristic",
+				confidence: 0.8,
+				status: "active",
+			});
+		}
+		this.db
+			.prepare("UPDATE memories SET text = ?, confidence = ?, status = 'active', updated_at = ? WHERE id = ?")
+			.run(text, Math.max(existing.confidence, 0.8), Date.now(), existing.id);
+		return this.getMemoryById(existing.id)!;
+	}
+
 	getRelevantMemories(projectId?: string | null, taskId?: string | null): MemoryRecord[] {
 		const rows = this.db
 			.prepare(
@@ -425,7 +454,11 @@ export class LovelaceStore {
 					 OR (scope = 'task' AND task_id = ?)
 				   )
 				 ORDER BY
-				   CASE scope WHEN 'task' THEN 0 WHEN 'project' THEN 1 WHEN 'domain' THEN 2 ELSE 3 END,
+				   CASE WHEN scope = 'task' AND text LIKE 'Continuation summary for %' THEN -1
+				        WHEN scope = 'task' THEN 0
+				        WHEN scope = 'project' THEN 1
+				        WHEN scope = 'domain' THEN 2
+				        ELSE 3 END,
 				   confidence DESC,
 				   updated_at DESC
 				 LIMIT 20`,

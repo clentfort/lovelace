@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { Text, matchesKey } from "@mariozechner/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { LovelaceStore } from "./db.js";
+import { buildTaskContinuationSummary } from "./continuation.js";
 import { detectRepo, type RepoInfo } from "./repo.js";
 import { scanProject } from "./scan.js";
 import type { BacklinkStatus, MemoryKind, MemoryScope, PiSessionRecord, PrRecord, ProjectRecord, TaskRecord } from "./types.js";
@@ -249,6 +250,20 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 		store.close();
 	});
 
+	pi.on("session_before_compact", async (event, ctx) => {
+		if (!state.currentTask) return;
+		const summary = buildTaskContinuationSummary({
+			task: state.currentTask,
+			pr: state.currentPr,
+			backlinkStatus: state.currentBacklinkStatus,
+			branch: state.repo?.branch,
+			messages: [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages],
+		});
+		if (!summary) return;
+		store.upsertTaskContinuationSummary(state.currentTask.id, summary);
+		ctx.ui.notify(`Saved continuation summary for ${state.currentTask.ref}`, "info");
+	});
+
 	pi.on("before_agent_start", async (event, ctx) => {
 		await detectTaskFromText(ctx, event.prompt, "manual");
 		const memories = store.getRelevantMemories(state.project?.id, state.currentTask?.id);
@@ -429,7 +444,7 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 				return;
 			}
 			const memories = store.getRelevantMemories(state.project?.id, state.currentTask?.id);
-			const body = formatMemoryBlock(memories, state.currentTask, state.currentPr) ?? "No relevant memory yet.";
+			const body = formatMemoryBlock(memories, state.currentTask, state.currentPr, state.currentBacklinkStatus) ?? "No relevant memory yet.";
 			await showModal(ctx, "Lovelace memory", body);
 		},
 	});

@@ -6,7 +6,7 @@
   "description": "Personal workflow tooling project; starts with a Pi memory extension.",
   "keywords": ["pi-package"],
   "scripts": {
-    "test": "tsx tests/memory-store.test.ts"
+    "test": "tsx tests/run.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
