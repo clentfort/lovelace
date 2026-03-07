@@ -4,21 +4,27 @@
   "private": true,
   "type": "module",
   "description": "Personal workflow tooling project; starts with a Pi memory extension.",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "scripts": {
-    "test": "tsx tests/run.ts"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
-    "tsx": "^4.21.0"
+    "vitest": "^3.2.4"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*"
   },
   "pi": {
-    "extensions": ["./extensions/memory/src/index.ts"]
+    "extensions": [
+      "./extensions/memory/src/index.ts"
+    ]
   }
 }

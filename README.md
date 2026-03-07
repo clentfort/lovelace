@@ -17,4 +17,6 @@ We start with a Pi memory extension.
 
 ## Development
 
-- `npm test` — run the current test suite
+- `npm test` — run the Vitest suite once
+- `npm run test:watch` — run Vitest in watch mode
+- `npm run test:coverage` — run Vitest with coverage

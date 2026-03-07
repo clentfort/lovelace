@@ -1,65 +1,76 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import assert from "node:assert/strict";
+import { afterEach, describe, expect, it } from "vitest";
 import { LovelaceStore } from "../extensions/memory/src/db.ts";
 
-const dir = mkdtempSync(join(tmpdir(), "lovelace-test-"));
-const dbPath = join(dir, "memory.db");
-const store = new LovelaceStore(dbPath);
+const cleanupPaths: string[] = [];
 
-try {
-	const project = store.upsertProject({ name: "demo", rootPath: "/tmp/demo", gitRemote: null });
-	const task = store.upsertTask({ ref: "PROJ-100", title: "secret ghp_abcdefghijklmnopqrstuvwxyz123456" });
-	const pr = store.upsertPr({ projectId: project.id, prNumber: 123, title: "contains ghp_abcdefghijklmnopqrstuvwxyz123456" });
+afterEach(() => {
+	while (cleanupPaths.length > 0) {
+		const path = cleanupPaths.pop();
+		if (path) rmSync(path, { recursive: true, force: true });
+	}
+});
 
-	assert.equal(task.title, "secret [REDACTED]");
-	assert.equal(pr.title, "contains [REDACTED]");
-
-	const first = store.noteProjectCommandSuccess(project.id, "pnpm test");
-	assert.equal(first.status, "candidate");
-	assert.equal(first.confidence, 0.55);
-
-	const second = store.noteProjectCommandSuccess(project.id, "pnpm test");
-	assert.equal(second.status, "candidate");
-	assert.ok(Math.abs(second.confidence - 0.7) < 1e-9);
-
-	const third = store.noteProjectCommandSuccess(project.id, "pnpm test");
-	assert.ok(Math.abs(third.confidence - 0.85) < 1e-9);
-	assert.equal(third.status, "active");
-
-	const memory = store.createMemory({
-		scope: "project",
-		projectId: project.id,
-		kind: "note",
-		text: "token ghp_abcdefghijklmnopqrstuvwxyz123456",
-	});
-	assert.equal(memory.text, "token [REDACTED]");
-
-	const unknown = store.upsertTaskPrLink(pr.id, task.id, "unknown");
-	assert.equal(unknown, "unknown");
-	const prLinked = store.upsertTaskPrLink(pr.id, task.id, "pr-linked-to-task");
-	assert.equal(prLinked, "pr-linked-to-task");
-	const both = store.upsertTaskPrLink(pr.id, task.id, "task-linked-to-pr");
-	assert.equal(both, "both");
-
-	const links = store.listPrsForTask(task.id);
-	assert.equal(links.length, 1);
-	assert.equal(links[0].backlinkStatus, "both");
-	assert.equal(links[0].pr.prNumber, 123);
-
-	const continuation1 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Keep going");
-	const continuation2 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Latest focus changed");
-	assert.equal(continuation1.id, continuation2.id);
-	assert.match(continuation2.text, /Latest focus changed/);
-
-	store.upsertPiSession({ piSessionId: "session-1", sessionFile: "/tmp/one", projectId: project.id, taskId: task.id });
-	const recent = store.listRecentTasksForProject(project.id);
-	assert.equal(recent.length, 1);
-	assert.equal(recent[0].ref, "PROJ-100");
-
-	console.log("memory-store tests passed");
-} finally {
-	store.close();
-	rmSync(dir, { recursive: true, force: true });
+function createStore() {
+	const dir = mkdtempSync(join(tmpdir(), "lovelace-test-"));
+	cleanupPaths.push(dir);
+	const dbPath = join(dir, "memory.db");
+	return new LovelaceStore(dbPath);
 }
+
+describe("LovelaceStore", () => {
+	it("sanitizes text, promotes commands, tracks links, and lists recent tasks", () => {
+		const store = createStore();
+		try {
+			const project = store.upsertProject({ name: "demo", rootPath: "/tmp/demo", gitRemote: null });
+			const task = store.upsertTask({ ref: "PROJ-100", title: "secret ghp_abcdefghijklmnopqrstuvwxyz123456" });
+			const pr = store.upsertPr({ projectId: project.id, prNumber: 123, title: "contains ghp_abcdefghijklmnopqrstuvwxyz123456" });
+
+			expect(task.title).toBe("secret [REDACTED]");
+			expect(pr.title).toBe("contains [REDACTED]");
+
+			const first = store.noteProjectCommandSuccess(project.id, "pnpm test");
+			expect(first.status).toBe("candidate");
+			expect(first.confidence).toBe(0.55);
+
+			const second = store.noteProjectCommandSuccess(project.id, "pnpm test");
+			expect(second.status).toBe("candidate");
+			expect(second.confidence).toBeCloseTo(0.7);
+
+			const third = store.noteProjectCommandSuccess(project.id, "pnpm test");
+			expect(third.confidence).toBeCloseTo(0.85);
+			expect(third.status).toBe("active");
+
+			const memory = store.createMemory({
+				scope: "project",
+				projectId: project.id,
+				kind: "note",
+				text: "token ghp_abcdefghijklmnopqrstuvwxyz123456",
+			});
+			expect(memory.text).toBe("token [REDACTED]");
+
+			expect(store.upsertTaskPrLink(pr.id, task.id, "unknown")).toBe("unknown");
+			expect(store.upsertTaskPrLink(pr.id, task.id, "pr-linked-to-task")).toBe("pr-linked-to-task");
+			expect(store.upsertTaskPrLink(pr.id, task.id, "task-linked-to-pr")).toBe("both");
+
+			const links = store.listPrsForTask(task.id);
+			expect(links).toHaveLength(1);
+			expect(links[0].backlinkStatus).toBe("both");
+			expect(links[0].pr.prNumber).toBe(123);
+
+			const continuation1 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Keep going");
+			const continuation2 = store.upsertTaskContinuationSummary(task.id, "Continuation summary for PROJ-100\n- Latest focus changed");
+			expect(continuation1.id).toBe(continuation2.id);
+			expect(continuation2.text).toMatch(/Latest focus changed/);
+
+			store.upsertPiSession({ piSessionId: "session-1", sessionFile: "/tmp/one", projectId: project.id, taskId: task.id });
+			const recent = store.listRecentTasksForProject(project.id);
+			expect(recent).toHaveLength(1);
+			expect(recent[0].ref).toBe("PROJ-100");
+		} finally {
+			store.close();
+		}
+	});
+});
