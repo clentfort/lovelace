@@ -128,7 +128,7 @@
 2. Staleness rules for old memories
 3. Richer task detection and enrichment
 4. Extension-level tests for commands/retrieval
-5. Optional gitleaks integration if desired later
+5. More task utilities (for example recent task selection)
 
 ## Definition of done for first usable version
 - [x] Starting Pi in a repo registers project + Pi session

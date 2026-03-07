@@ -53,6 +53,11 @@ try {
 	assert.equal(continuation1.id, continuation2.id);
 	assert.match(continuation2.text, /Latest focus changed/);
 
+	store.upsertPiSession({ piSessionId: "session-1", sessionFile: "/tmp/one", projectId: project.id, taskId: task.id });
+	const recent = store.listRecentTasksForProject(project.id);
+	assert.equal(recent.length, 1);
+	assert.equal(recent[0].ref, "PROJ-100");
+
 	console.log("memory-store tests passed");
 } finally {
 	store.close();

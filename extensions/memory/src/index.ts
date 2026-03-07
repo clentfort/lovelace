@@ -312,9 +312,21 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("task", {
-		description: "Set, clear, or show the current task",
+		description: "Set, clear, show, or list recent tasks",
 		handler: async (args, ctx) => {
 			const trimmed = (args ?? "").trim();
+			if (trimmed === "recent") {
+				if (!state.project) {
+					ctx.ui.notify("No current project detected", "error");
+					return;
+				}
+				const tasks = store.listRecentTasksForProject(state.project.id, 8);
+				const body = tasks.length
+					? tasks.map((task, index) => `${index + 1}. ${task.ref}${task.title ? ` — ${task.title}` : ""}`).join("\n")
+					: "No recent tasks for this project.";
+				await showModal(ctx, "Recent tasks", body);
+				return;
+			}
 			if (!trimmed || trimmed === "show") {
 				const prLink = state.currentTask ? store.listPrsForTask(state.currentTask.id)[0] : undefined;
 				const lines = [

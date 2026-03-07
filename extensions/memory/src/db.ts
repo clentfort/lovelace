@@ -283,6 +283,20 @@ export class LovelaceStore {
 		return this.getTaskById(session.taskId);
 	}
 
+	listRecentTasksForProject(projectId: string, limit = 5): TaskRecord[] {
+		return this.db
+			.prepare(
+				`SELECT t.id, t.ref, t.source_type as sourceType, t.title, t.summary, t.status, t.created_at as createdAt, t.updated_at as updatedAt, t.last_seen_at as lastSeenAt
+				 FROM tasks t
+				 JOIN pi_sessions s ON s.task_id = t.id
+				 WHERE s.project_id = ? AND s.task_id IS NOT NULL
+				 GROUP BY t.id
+				 ORDER BY MAX(s.updated_at) DESC, t.last_seen_at DESC
+				 LIMIT ?`,
+			)
+			.all(projectId, limit) as TaskRecord[];
+	}
+
 	upsertPr(input: UpsertPrInput): PrRecord {
 		const now = Date.now();
 		const sanitizedTitle = sanitizeFreeformText(input.title);
