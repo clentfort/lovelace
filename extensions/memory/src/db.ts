@@ -273,40 +273,56 @@ export class LovelaceStore {
 
   upsertPiSession(input: UpsertSessionInput): PiSessionRecord {
     const now = Date.now();
-    const existing = input.piSessionId
-      ? ((this.db
-          .prepare("SELECT * FROM pi_sessions WHERE pi_session_id = ?")
-          .get(input.piSessionId) as PiSessionRecord | undefined) ??
-        (input.sessionFile
-          ? (this.db
-              .prepare("SELECT * FROM pi_sessions WHERE session_file = ?")
-              .get(input.sessionFile) as PiSessionRecord | undefined)
-          : undefined))
-      : input.sessionFile
-        ? (this.db
-            .prepare("SELECT * FROM pi_sessions WHERE session_file = ?")
-            .get(input.sessionFile) as PiSessionRecord | undefined)
-        : undefined;
+    let existing: PiSessionRecord | undefined;
+
+    if (input.piSessionId) {
+      existing = this.db
+        .prepare(
+          "SELECT id, pi_session_id as piSessionId, session_file as sessionFile, project_id as projectId, task_id as taskId, started_at as startedAt, updated_at as updatedAt FROM pi_sessions WHERE pi_session_id = ?",
+        )
+        .get(input.piSessionId) as PiSessionRecord | undefined;
+    }
+
+    if (!existing && input.sessionFile) {
+      existing = this.db
+        .prepare(
+          "SELECT id, pi_session_id as piSessionId, session_file as sessionFile, project_id as projectId, task_id as taskId, started_at as startedAt, updated_at as updatedAt FROM pi_sessions WHERE session_file = ?",
+        )
+        .get(input.sessionFile) as PiSessionRecord | undefined;
+    }
 
     if (existing) {
+      const piSessionId = input.piSessionId ?? existing.piSessionId ?? null;
+      const sessionFile = input.sessionFile ?? existing.sessionFile ?? null;
+
+      // Handle the case where we might violate UNIQUE constraint due to merging
+      const other = this.db
+        .prepare(
+          "SELECT id FROM pi_sessions WHERE (pi_session_id = ? OR session_file = ?) AND id != ?",
+        )
+        .get(piSessionId, sessionFile, existing.id) as { id: string } | undefined;
+
+      if (other) {
+        this.db.prepare("DELETE FROM pi_sessions WHERE id = ?").run(existing.id);
+        return this.upsertPiSession({
+          piSessionId,
+          sessionFile,
+          projectId: input.projectId,
+          taskId: input.taskId ?? existing.taskId,
+        });
+      }
+
       this.db
         .prepare(
           `UPDATE pi_sessions
-					 SET pi_session_id = COALESCE(?, pi_session_id),
-					     session_file = COALESCE(?, session_file),
+					 SET pi_session_id = ?,
+					     session_file = ?,
 					     project_id = ?,
-					     task_id = COALESCE(?, task_id),
+					     task_id = ?,
 					     updated_at = ?
 					 WHERE id = ?`,
         )
-        .run(
-          input.piSessionId ?? null,
-          input.sessionFile ?? null,
-          input.projectId,
-          input.taskId ?? null,
-          now,
-          existing.id,
-        );
+        .run(piSessionId, sessionFile, input.projectId, input.taskId ?? existing.taskId ?? null, now, existing.id);
       return this.getPiSessionById(existing.id)!;
     }
 

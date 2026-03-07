@@ -20,6 +20,7 @@
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.4",
     "npm-run-all2": "^8.0.4",
     "oxfmt": "^0.36.0",
     "oxlint": "^1.51.0",
