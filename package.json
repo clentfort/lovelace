@@ -2,25 +2,43 @@
   "name": "lovelace",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Personal workflow tooling project; starts with a Pi memory extension.",
   "keywords": [
     "pi-package"
   ],
+  "type": "module",
   "scripts": {
+    "lint": "oxlint --deny-warnings --node-plugin --vitest-plugin .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "check": "npm-run-all --parallel lint format:check test"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {
+    "npm-run-all2": "^8.0.4",
+    "oxfmt": "^0.36.0",
+    "oxlint": "^1.51.0",
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
     "@mariozechner/pi-tui": "*"
+  },
+  "packageManager": "pnpm@10.12.2",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ],
+    "ignoredBuiltDependencies": [
+      "koffi",
+      "protobufjs"
+    ]
   },
   "pi": {
     "extensions": [

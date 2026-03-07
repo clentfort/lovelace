@@ -17,6 +17,20 @@ We start with a Pi memory extension.
 
 ## Development
 
-- `npm test` — run the Vitest suite once
-- `npm run test:watch` — run Vitest in watch mode
-- `npm run test:coverage` — run Vitest with coverage
+This repo follows the non-browser parts of the tooling stack from Christoph Nakazawa's “Fastest Frontend Tooling for Humans & AI” post:
+
+- `pnpm`
+- `Vitest`
+- `Oxlint`
+- `Oxfmt`
+- `npm-run-all2`
+
+Common commands:
+
+- `pnpm test` — run the Vitest suite once
+- `pnpm test:watch` — run Vitest in watch mode
+- `pnpm test:coverage` — run Vitest with coverage
+- `pnpm lint` — run Oxlint
+- `pnpm format` — format with Oxfmt
+- `pnpm format:check` — check formatting with Oxfmt
+- `pnpm check` — run lint, format check, and tests in parallel

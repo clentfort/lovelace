@@ -3,77 +3,89 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { sanitizeFreeformText } from "./sanitize.js";
-import type { BacklinkStatus, MemoryKind, MemoryRecord, MemoryScope, MemorySource, PiSessionRecord, PrRecord, ProjectRecord, TaskPrLinkRecord, TaskRecord, TaskSourceType } from "./types.js";
+import type {
+  BacklinkStatus,
+  MemoryKind,
+  MemoryRecord,
+  MemoryScope,
+  MemorySource,
+  PiSessionRecord,
+  PrRecord,
+  ProjectRecord,
+  TaskPrLinkRecord,
+  TaskRecord,
+  TaskSourceType,
+} from "./types.js";
 
 export interface UpsertProjectInput {
-	name: string;
-	rootPath: string;
-	gitRemote?: string | null;
+  name: string;
+  rootPath: string;
+  gitRemote?: string | null;
 }
 
 export interface UpsertTaskInput {
-	ref: string;
-	sourceType?: TaskSourceType;
-	title?: string | null;
-	summary?: string | null;
-	status?: TaskRecord["status"];
+  ref: string;
+  sourceType?: TaskSourceType;
+  title?: string | null;
+  summary?: string | null;
+  status?: TaskRecord["status"];
 }
 
 export interface UpsertSessionInput {
-	piSessionId?: string | null;
-	sessionFile?: string | null;
-	projectId: string;
-	taskId?: string | null;
+  piSessionId?: string | null;
+  sessionFile?: string | null;
+  projectId: string;
+  taskId?: string | null;
 }
 
 export interface UpsertPrInput {
-	projectId: string;
-	prNumber?: number | null;
-	prUrl?: string | null;
-	title?: string | null;
+  projectId: string;
+  prNumber?: number | null;
+  prUrl?: string | null;
+  title?: string | null;
 }
 
 export interface CreateMemoryInput {
-	scope: MemoryScope;
-	projectId?: string | null;
-	taskId?: string | null;
-	kind: MemoryKind;
-	text: string;
-	confidence?: number;
-	status?: MemoryRecord["status"];
-	source?: MemorySource;
+  scope: MemoryScope;
+  projectId?: string | null;
+  taskId?: string | null;
+  kind: MemoryKind;
+  text: string;
+  confidence?: number;
+  status?: MemoryRecord["status"];
+  source?: MemorySource;
 }
 
 function mergeBacklinkStatus(current: BacklinkStatus, next: BacklinkStatus): BacklinkStatus {
-	if (current === "both" || next === "both") return "both";
-	if (current === "unknown") return next;
-	if (next === "unknown") return current;
-	if (current !== next) return "both";
-	return current;
+  if (current === "both" || next === "both") return "both";
+  if (current === "unknown") return next;
+  if (next === "unknown") return current;
+  if (current !== next) return "both";
+  return current;
 }
 
 function parseBacklinkStatus(metadataJson: string | null | undefined): BacklinkStatus {
-	if (!metadataJson) return "unknown";
-	try {
-		const parsed = JSON.parse(metadataJson) as { backlinkStatus?: BacklinkStatus };
-		return parsed.backlinkStatus ?? "unknown";
-	} catch {
-		return "unknown";
-	}
+  if (!metadataJson) return "unknown";
+  try {
+    const parsed = JSON.parse(metadataJson) as { backlinkStatus?: BacklinkStatus };
+    return parsed.backlinkStatus ?? "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 export class LovelaceStore {
-	private db: Database.Database;
+  private db: Database.Database;
 
-	constructor(dbPath: string) {
-		mkdirSync(dirname(dbPath), { recursive: true });
-		this.db = new Database(dbPath);
-		this.db.pragma("journal_mode = WAL");
-		this.bootstrap();
-	}
+  constructor(dbPath: string) {
+    mkdirSync(dirname(dbPath), { recursive: true });
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.bootstrap();
+  }
 
-	private bootstrap() {
-		this.db.exec(`
+  private bootstrap() {
+    this.db.exec(`
 			CREATE TABLE IF NOT EXISTS projects (
 				id TEXT PRIMARY KEY,
 				name TEXT NOT NULL,
@@ -153,52 +165,56 @@ export class LovelaceStore {
 			CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_type, from_id);
 			CREATE INDEX IF NOT EXISTS idx_edges_to ON edges(to_type, to_id);
 		`);
-	}
+  }
 
-	close() {
-		this.db.close();
-	}
+  close() {
+    this.db.close();
+  }
 
-	upsertProject(input: UpsertProjectInput): ProjectRecord {
-		const now = Date.now();
-		const existing = this.db
-			.prepare("SELECT * FROM projects WHERE root_path = ?")
-			.get(input.rootPath) as ProjectRecord | undefined;
+  upsertProject(input: UpsertProjectInput): ProjectRecord {
+    const now = Date.now();
+    const existing = this.db
+      .prepare("SELECT * FROM projects WHERE root_path = ?")
+      .get(input.rootPath) as ProjectRecord | undefined;
 
-		if (existing) {
-			this.db
-				.prepare(
-					`UPDATE projects
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE projects
 					 SET name = ?, git_remote = COALESCE(?, git_remote), last_seen_at = ?
 					 WHERE id = ?`,
-				)
-				.run(input.name, input.gitRemote ?? null, now, existing.id);
-			return this.getProjectById(existing.id)!;
-		}
+        )
+        .run(input.name, input.gitRemote ?? null, now, existing.id);
+      return this.getProjectById(existing.id)!;
+    }
 
-		const id = randomUUID();
-		this.db
-			.prepare(
-				`INSERT INTO projects (id, name, root_path, git_remote, first_seen_at, last_seen_at)
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO projects (id, name, root_path, git_remote, first_seen_at, last_seen_at)
 				 VALUES (?, ?, ?, ?, ?, ?)`,
-			)
-			.run(id, input.name, input.rootPath, input.gitRemote ?? null, now, now);
-		return this.getProjectById(id)!;
-	}
+      )
+      .run(id, input.name, input.rootPath, input.gitRemote ?? null, now, now);
+    return this.getProjectById(id)!;
+  }
 
-	getProjectById(id: string): ProjectRecord | undefined {
-		return this.db.prepare("SELECT id, name, root_path as rootPath, git_remote as gitRemote, first_seen_at as firstSeenAt, last_seen_at as lastSeenAt FROM projects WHERE id = ?").get(id) as ProjectRecord | undefined;
-	}
+  getProjectById(id: string): ProjectRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, name, root_path as rootPath, git_remote as gitRemote, first_seen_at as firstSeenAt, last_seen_at as lastSeenAt FROM projects WHERE id = ?",
+      )
+      .get(id) as ProjectRecord | undefined;
+  }
 
-	upsertTask(input: UpsertTaskInput): TaskRecord {
-		const now = Date.now();
-		const sanitizedTitle = sanitizeFreeformText(input.title);
-		const sanitizedSummary = sanitizeFreeformText(input.summary);
-		const existing = this.getTaskByRef(input.ref);
-		if (existing) {
-			this.db
-				.prepare(
-					`UPDATE tasks
+  upsertTask(input: UpsertTaskInput): TaskRecord {
+    const now = Date.now();
+    const sanitizedTitle = sanitizeFreeformText(input.title);
+    const sanitizedSummary = sanitizeFreeformText(input.summary);
+    const existing = this.getTaskByRef(input.ref);
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE tasks
 					 SET source_type = COALESCE(?, source_type),
 					     title = COALESCE(?, title),
 					     summary = COALESCE(?, summary),
@@ -206,259 +222,398 @@ export class LovelaceStore {
 					     updated_at = ?,
 					     last_seen_at = ?
 					 WHERE id = ?`,
-				)
-				.run(input.sourceType ?? null, sanitizedTitle, sanitizedSummary, input.status ?? null, now, now, existing.id);
-			return this.getTaskById(existing.id)!;
-		}
+        )
+        .run(
+          input.sourceType ?? null,
+          sanitizedTitle,
+          sanitizedSummary,
+          input.status ?? null,
+          now,
+          now,
+          existing.id,
+        );
+      return this.getTaskById(existing.id)!;
+    }
 
-		const id = randomUUID();
-		this.db
-			.prepare(
-				`INSERT INTO tasks (id, ref, source_type, title, summary, status, created_at, updated_at, last_seen_at)
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO tasks (id, ref, source_type, title, summary, status, created_at, updated_at, last_seen_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(id, input.ref, input.sourceType ?? "manual", sanitizedTitle, sanitizedSummary, input.status ?? "active", now, now, now);
-		return this.getTaskById(id)!;
-	}
+      )
+      .run(
+        id,
+        input.ref,
+        input.sourceType ?? "manual",
+        sanitizedTitle,
+        sanitizedSummary,
+        input.status ?? "active",
+        now,
+        now,
+        now,
+      );
+    return this.getTaskById(id)!;
+  }
 
-	getTaskByRef(ref: string): TaskRecord | undefined {
-		return this.db.prepare("SELECT id, ref, source_type as sourceType, title, summary, status, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt FROM tasks WHERE ref = ?").get(ref) as TaskRecord | undefined;
-	}
+  getTaskByRef(ref: string): TaskRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, ref, source_type as sourceType, title, summary, status, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt FROM tasks WHERE ref = ?",
+      )
+      .get(ref) as TaskRecord | undefined;
+  }
 
-	getTaskById(id: string): TaskRecord | undefined {
-		return this.db.prepare("SELECT id, ref, source_type as sourceType, title, summary, status, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt FROM tasks WHERE id = ?").get(id) as TaskRecord | undefined;
-	}
+  getTaskById(id: string): TaskRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, ref, source_type as sourceType, title, summary, status, created_at as createdAt, updated_at as updatedAt, last_seen_at as lastSeenAt FROM tasks WHERE id = ?",
+      )
+      .get(id) as TaskRecord | undefined;
+  }
 
-	upsertPiSession(input: UpsertSessionInput): PiSessionRecord {
-		const now = Date.now();
-		const existing = input.piSessionId
-			? ((this.db.prepare("SELECT * FROM pi_sessions WHERE pi_session_id = ?").get(input.piSessionId) as PiSessionRecord | undefined) ??
-				(input.sessionFile
-					? (this.db.prepare("SELECT * FROM pi_sessions WHERE session_file = ?").get(input.sessionFile) as PiSessionRecord | undefined)
-					: undefined))
-			: input.sessionFile
-				? (this.db.prepare("SELECT * FROM pi_sessions WHERE session_file = ?").get(input.sessionFile) as PiSessionRecord | undefined)
-				: undefined;
+  upsertPiSession(input: UpsertSessionInput): PiSessionRecord {
+    const now = Date.now();
+    const existing = input.piSessionId
+      ? ((this.db
+          .prepare("SELECT * FROM pi_sessions WHERE pi_session_id = ?")
+          .get(input.piSessionId) as PiSessionRecord | undefined) ??
+        (input.sessionFile
+          ? (this.db
+              .prepare("SELECT * FROM pi_sessions WHERE session_file = ?")
+              .get(input.sessionFile) as PiSessionRecord | undefined)
+          : undefined))
+      : input.sessionFile
+        ? (this.db
+            .prepare("SELECT * FROM pi_sessions WHERE session_file = ?")
+            .get(input.sessionFile) as PiSessionRecord | undefined)
+        : undefined;
 
-		if (existing) {
-			this.db
-				.prepare(
-					`UPDATE pi_sessions
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE pi_sessions
 					 SET pi_session_id = COALESCE(?, pi_session_id),
 					     session_file = COALESCE(?, session_file),
 					     project_id = ?,
 					     task_id = COALESCE(?, task_id),
 					     updated_at = ?
 					 WHERE id = ?`,
-				)
-				.run(input.piSessionId ?? null, input.sessionFile ?? null, input.projectId, input.taskId ?? null, now, existing.id);
-			return this.getPiSessionById(existing.id)!;
-		}
+        )
+        .run(
+          input.piSessionId ?? null,
+          input.sessionFile ?? null,
+          input.projectId,
+          input.taskId ?? null,
+          now,
+          existing.id,
+        );
+      return this.getPiSessionById(existing.id)!;
+    }
 
-		const id = randomUUID();
-		this.db
-			.prepare(
-				`INSERT INTO pi_sessions (id, pi_session_id, session_file, project_id, task_id, started_at, updated_at)
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO pi_sessions (id, pi_session_id, session_file, project_id, task_id, started_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(id, input.piSessionId ?? null, input.sessionFile ?? null, input.projectId, input.taskId ?? null, now, now);
-		return this.getPiSessionById(id)!;
-	}
+      )
+      .run(
+        id,
+        input.piSessionId ?? null,
+        input.sessionFile ?? null,
+        input.projectId,
+        input.taskId ?? null,
+        now,
+        now,
+      );
+    return this.getPiSessionById(id)!;
+  }
 
-	getPiSessionById(id: string): PiSessionRecord | undefined {
-		return this.db.prepare("SELECT id, pi_session_id as piSessionId, session_file as sessionFile, project_id as projectId, task_id as taskId, started_at as startedAt, updated_at as updatedAt FROM pi_sessions WHERE id = ?").get(id) as PiSessionRecord | undefined;
-	}
+  getPiSessionById(id: string): PiSessionRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, pi_session_id as piSessionId, session_file as sessionFile, project_id as projectId, task_id as taskId, started_at as startedAt, updated_at as updatedAt FROM pi_sessions WHERE id = ?",
+      )
+      .get(id) as PiSessionRecord | undefined;
+  }
 
-	setTaskForSession(sessionId: string, taskId: string | null) {
-		this.db.prepare("UPDATE pi_sessions SET task_id = ?, updated_at = ? WHERE id = ?").run(taskId, Date.now(), sessionId);
-	}
+  setTaskForSession(sessionId: string, taskId: string | null) {
+    this.db
+      .prepare("UPDATE pi_sessions SET task_id = ?, updated_at = ? WHERE id = ?")
+      .run(taskId, Date.now(), sessionId);
+  }
 
-	findTaskForSession(piSessionId?: string | null, sessionFile?: string | null): TaskRecord | undefined {
-		const session = piSessionId
-			? (this.db.prepare("SELECT task_id as taskId FROM pi_sessions WHERE pi_session_id = ?").get(piSessionId) as { taskId: string | null } | undefined)
-			: sessionFile
-				? (this.db.prepare("SELECT task_id as taskId FROM pi_sessions WHERE session_file = ?").get(sessionFile) as { taskId: string | null } | undefined)
-				: undefined;
-		if (!session?.taskId) return undefined;
-		return this.getTaskById(session.taskId);
-	}
+  findTaskForSession(
+    piSessionId?: string | null,
+    sessionFile?: string | null,
+  ): TaskRecord | undefined {
+    const session = piSessionId
+      ? (this.db
+          .prepare("SELECT task_id as taskId FROM pi_sessions WHERE pi_session_id = ?")
+          .get(piSessionId) as { taskId: string | null } | undefined)
+      : sessionFile
+        ? (this.db
+            .prepare("SELECT task_id as taskId FROM pi_sessions WHERE session_file = ?")
+            .get(sessionFile) as { taskId: string | null } | undefined)
+        : undefined;
+    if (!session?.taskId) return undefined;
+    return this.getTaskById(session.taskId);
+  }
 
-	listRecentTasksForProject(projectId: string, limit = 5): TaskRecord[] {
-		return this.db
-			.prepare(
-				`SELECT t.id, t.ref, t.source_type as sourceType, t.title, t.summary, t.status, t.created_at as createdAt, t.updated_at as updatedAt, t.last_seen_at as lastSeenAt
+  listRecentTasksForProject(projectId: string, limit = 5): TaskRecord[] {
+    return this.db
+      .prepare(
+        `SELECT t.id, t.ref, t.source_type as sourceType, t.title, t.summary, t.status, t.created_at as createdAt, t.updated_at as updatedAt, t.last_seen_at as lastSeenAt
 				 FROM tasks t
 				 JOIN pi_sessions s ON s.task_id = t.id
 				 WHERE s.project_id = ? AND s.task_id IS NOT NULL
 				 GROUP BY t.id
 				 ORDER BY MAX(s.updated_at) DESC, t.last_seen_at DESC
 				 LIMIT ?`,
-			)
-			.all(projectId, limit) as TaskRecord[];
-	}
+      )
+      .all(projectId, limit) as TaskRecord[];
+  }
 
-	upsertPr(input: UpsertPrInput): PrRecord {
-		const now = Date.now();
-		const sanitizedTitle = sanitizeFreeformText(input.title);
-		let existing: PrRecord | undefined;
-		if (input.prUrl) {
-			existing = this.db.prepare("SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE pr_url = ?").get(input.prUrl) as PrRecord | undefined;
-		}
-		if (!existing && input.prNumber != null) {
-			existing = this.db.prepare("SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE project_id = ? AND pr_number = ?").get(input.projectId, input.prNumber) as PrRecord | undefined;
-		}
-		if (existing) {
-			this.db
-				.prepare(
-					`UPDATE prs
+  upsertPr(input: UpsertPrInput): PrRecord {
+    const now = Date.now();
+    const sanitizedTitle = sanitizeFreeformText(input.title);
+    let existing: PrRecord | undefined;
+    if (input.prUrl) {
+      existing = this.db
+        .prepare(
+          "SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE pr_url = ?",
+        )
+        .get(input.prUrl) as PrRecord | undefined;
+    }
+    if (!existing && input.prNumber != null) {
+      existing = this.db
+        .prepare(
+          "SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE project_id = ? AND pr_number = ?",
+        )
+        .get(input.projectId, input.prNumber) as PrRecord | undefined;
+    }
+    if (existing) {
+      this.db
+        .prepare(
+          `UPDATE prs
 					 SET pr_number = COALESCE(?, pr_number), pr_url = COALESCE(?, pr_url), title = COALESCE(?, title), updated_at = ?
 					 WHERE id = ?`,
-				)
-				.run(input.prNumber ?? null, input.prUrl ?? null, sanitizedTitle, now, existing.id);
-			return this.getPrById(existing.id)!;
-		}
-		const id = randomUUID();
-		this.db
-			.prepare(
-				`INSERT INTO prs (id, project_id, pr_number, pr_url, title, created_at, updated_at)
+        )
+        .run(input.prNumber ?? null, input.prUrl ?? null, sanitizedTitle, now, existing.id);
+      return this.getPrById(existing.id)!;
+    }
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO prs (id, project_id, pr_number, pr_url, title, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			)
-			.run(id, input.projectId, input.prNumber ?? null, input.prUrl ?? null, sanitizedTitle, now, now);
-		return this.getPrById(id)!;
-	}
+      )
+      .run(
+        id,
+        input.projectId,
+        input.prNumber ?? null,
+        input.prUrl ?? null,
+        sanitizedTitle,
+        now,
+        now,
+      );
+    return this.getPrById(id)!;
+  }
 
-	getPrById(id: string): PrRecord | undefined {
-		return this.db.prepare("SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE id = ?").get(id) as PrRecord | undefined;
-	}
+  getPrById(id: string): PrRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, project_id as projectId, pr_number as prNumber, pr_url as prUrl, title, created_at as createdAt, updated_at as updatedAt FROM prs WHERE id = ?",
+      )
+      .get(id) as PrRecord | undefined;
+  }
 
-	createEdge(fromType: string, fromId: string, edgeType: string, toType: string, toId: string, metadataJson?: string | null) {
-		this.db
-			.prepare(
-				`INSERT INTO edges (id, from_type, from_id, edge_type, to_type, to_id, metadata_json, created_at)
+  createEdge(
+    fromType: string,
+    fromId: string,
+    edgeType: string,
+    toType: string,
+    toId: string,
+    metadataJson?: string | null,
+  ) {
+    this.db
+      .prepare(
+        `INSERT INTO edges (id, from_type, from_id, edge_type, to_type, to_id, metadata_json, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(from_type, from_id, edge_type, to_type, to_id)
 				 DO UPDATE SET metadata_json = COALESCE(excluded.metadata_json, edges.metadata_json)`,
-			)
-			.run(randomUUID(), fromType, fromId, edgeType, toType, toId, metadataJson ?? null, Date.now());
-	}
+      )
+      .run(
+        randomUUID(),
+        fromType,
+        fromId,
+        edgeType,
+        toType,
+        toId,
+        metadataJson ?? null,
+        Date.now(),
+      );
+  }
 
-	upsertTaskPrLink(prId: string, taskId: string, backlinkStatus: BacklinkStatus = "unknown"): BacklinkStatus {
-		const existing = this.db
-			.prepare(
-				`SELECT metadata_json as metadataJson
+  upsertTaskPrLink(
+    prId: string,
+    taskId: string,
+    backlinkStatus: BacklinkStatus = "unknown",
+  ): BacklinkStatus {
+    const existing = this.db
+      .prepare(
+        `SELECT metadata_json as metadataJson
 				 FROM edges
 				 WHERE from_type = 'pr' AND from_id = ? AND edge_type = 'relates_to' AND to_type = 'task' AND to_id = ?`,
-			)
-			.get(prId, taskId) as { metadataJson: string | null } | undefined;
-		const merged = mergeBacklinkStatus(parseBacklinkStatus(existing?.metadataJson), backlinkStatus);
-		this.createEdge("pr", prId, "relates_to", "task", taskId, JSON.stringify({ backlinkStatus: merged }));
-		return merged;
-	}
+      )
+      .get(prId, taskId) as { metadataJson: string | null } | undefined;
+    const merged = mergeBacklinkStatus(parseBacklinkStatus(existing?.metadataJson), backlinkStatus);
+    this.createEdge(
+      "pr",
+      prId,
+      "relates_to",
+      "task",
+      taskId,
+      JSON.stringify({ backlinkStatus: merged }),
+    );
+    return merged;
+  }
 
-	getTaskPrLink(prId: string, taskId: string): BacklinkStatus {
-		const row = this.db
-			.prepare(
-				`SELECT metadata_json as metadataJson
+  getTaskPrLink(prId: string, taskId: string): BacklinkStatus {
+    const row = this.db
+      .prepare(
+        `SELECT metadata_json as metadataJson
 				 FROM edges
 				 WHERE from_type = 'pr' AND from_id = ? AND edge_type = 'relates_to' AND to_type = 'task' AND to_id = ?`,
-			)
-			.get(prId, taskId) as { metadataJson: string | null } | undefined;
-		return parseBacklinkStatus(row?.metadataJson);
-	}
+      )
+      .get(prId, taskId) as { metadataJson: string | null } | undefined;
+    return parseBacklinkStatus(row?.metadataJson);
+  }
 
-	private findMemory(scope: MemoryScope, text: string, projectId?: string | null, taskId?: string | null): MemoryRecord | undefined {
-		return this.db
-			.prepare(
-				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
+  private findMemory(
+    scope: MemoryScope,
+    text: string,
+    projectId?: string | null,
+    taskId?: string | null,
+  ): MemoryRecord | undefined {
+    return this.db
+      .prepare(
+        `SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
 				 FROM memories
 				 WHERE scope = ? AND IFNULL(project_id, '') = IFNULL(?, '') AND IFNULL(task_id, '') = IFNULL(?, '') AND text = ? AND status != 'archived'`,
-			)
-			.get(scope, projectId ?? null, taskId ?? null, text) as MemoryRecord | undefined;
-	}
+      )
+      .get(scope, projectId ?? null, taskId ?? null, text) as MemoryRecord | undefined;
+  }
 
-	createMemory(input: CreateMemoryInput): MemoryRecord {
-		const normalized = sanitizeFreeformText(input.text);
-		if (!normalized) throw new Error("Refusing to store empty memory");
-		const existing = this.findMemory(input.scope, normalized, input.projectId, input.taskId);
-		const now = Date.now();
-		if (existing) {
-			this.db.prepare("UPDATE memories SET updated_at = ?, source = ?, kind = ?, confidence = MAX(confidence, ?) WHERE id = ?").run(now, input.source ?? "manual", input.kind, input.confidence ?? 1, existing.id);
-			return this.getMemoryById(existing.id)!;
-		}
-		const id = randomUUID();
-		this.db
-			.prepare(
-				`INSERT INTO memories (id, scope, project_id, task_id, kind, text, confidence, status, source, created_at, updated_at, last_used_at)
+  createMemory(input: CreateMemoryInput): MemoryRecord {
+    const normalized = sanitizeFreeformText(input.text);
+    if (!normalized) throw new Error("Refusing to store empty memory");
+    const existing = this.findMemory(input.scope, normalized, input.projectId, input.taskId);
+    const now = Date.now();
+    if (existing) {
+      this.db
+        .prepare(
+          "UPDATE memories SET updated_at = ?, source = ?, kind = ?, confidence = MAX(confidence, ?) WHERE id = ?",
+        )
+        .run(now, input.source ?? "manual", input.kind, input.confidence ?? 1, existing.id);
+      return this.getMemoryById(existing.id)!;
+    }
+    const id = randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO memories (id, scope, project_id, task_id, kind, text, confidence, status, source, created_at, updated_at, last_used_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-			)
-			.run(id, input.scope, input.projectId ?? null, input.taskId ?? null, input.kind, normalized, input.confidence ?? 1, input.status ?? "active", input.source ?? "manual", now, now);
-		return this.getMemoryById(id)!;
-	}
+      )
+      .run(
+        id,
+        input.scope,
+        input.projectId ?? null,
+        input.taskId ?? null,
+        input.kind,
+        normalized,
+        input.confidence ?? 1,
+        input.status ?? "active",
+        input.source ?? "manual",
+        now,
+        now,
+      );
+    return this.getMemoryById(id)!;
+  }
 
-	getMemoryById(id: string): MemoryRecord | undefined {
-		return this.db.prepare("SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt FROM memories WHERE id = ?").get(id) as MemoryRecord | undefined;
-	}
+  getMemoryById(id: string): MemoryRecord | undefined {
+    return this.db
+      .prepare(
+        "SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt FROM memories WHERE id = ?",
+      )
+      .get(id) as MemoryRecord | undefined;
+  }
 
-	archiveMemory(id: string): void {
-		this.db.prepare("UPDATE memories SET status = 'archived', updated_at = ? WHERE id = ?").run(Date.now(), id);
-	}
+  archiveMemory(id: string): void {
+    this.db
+      .prepare("UPDATE memories SET status = 'archived', updated_at = ? WHERE id = ?")
+      .run(Date.now(), id);
+  }
 
-	noteProjectCommandSuccess(projectId: string, command: string): MemoryRecord {
-		const text = sanitizeFreeformText(`A useful working command in this repo is: \`${command.trim()}\``);
-		if (!text) throw new Error("Refusing to store empty command memory");
-		const existing = this.findMemory("project", text, projectId, null);
-		if (!existing) {
-			return this.createMemory({
-				scope: "project",
-				projectId,
-				kind: "command",
-				text,
-				source: "heuristic",
-				confidence: 0.55,
-				status: "candidate",
-			});
-		}
-		const nextConfidence = Math.min(1, existing.confidence + 0.15);
-		const nextStatus = existing.status === "active" || nextConfidence >= 0.85 ? "active" : existing.status;
-		this.db
-			.prepare("UPDATE memories SET confidence = ?, status = ?, updated_at = ? WHERE id = ?")
-			.run(nextConfidence, nextStatus, Date.now(), existing.id);
-		return this.getMemoryById(existing.id)!;
-	}
+  noteProjectCommandSuccess(projectId: string, command: string): MemoryRecord {
+    const text = sanitizeFreeformText(
+      `A useful working command in this repo is: \`${command.trim()}\``,
+    );
+    if (!text) throw new Error("Refusing to store empty command memory");
+    const existing = this.findMemory("project", text, projectId, null);
+    if (!existing) {
+      return this.createMemory({
+        scope: "project",
+        projectId,
+        kind: "command",
+        text,
+        source: "heuristic",
+        confidence: 0.55,
+        status: "candidate",
+      });
+    }
+    const nextConfidence = Math.min(1, existing.confidence + 0.15);
+    const nextStatus =
+      existing.status === "active" || nextConfidence >= 0.85 ? "active" : existing.status;
+    this.db
+      .prepare("UPDATE memories SET confidence = ?, status = ?, updated_at = ? WHERE id = ?")
+      .run(nextConfidence, nextStatus, Date.now(), existing.id);
+    return this.getMemoryById(existing.id)!;
+  }
 
-	upsertTaskContinuationSummary(taskId: string, summary: string): MemoryRecord {
-		const text = sanitizeFreeformText(summary);
-		if (!text) throw new Error("Refusing to store empty continuation summary");
-		const existing = this.db
-			.prepare(
-				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
+  upsertTaskContinuationSummary(taskId: string, summary: string): MemoryRecord {
+    const text = sanitizeFreeformText(summary);
+    if (!text) throw new Error("Refusing to store empty continuation summary");
+    const existing = this.db
+      .prepare(
+        `SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
 				 FROM memories
 				 WHERE scope = 'task' AND task_id = ? AND kind = 'note' AND source = 'heuristic' AND text LIKE 'Continuation summary for %'
 				 ORDER BY updated_at DESC
 				 LIMIT 1`,
-			)
-			.get(taskId) as MemoryRecord | undefined;
-		if (!existing) {
-			return this.createMemory({
-				scope: "task",
-				taskId,
-				kind: "note",
-				text,
-				source: "heuristic",
-				confidence: 0.8,
-				status: "active",
-			});
-		}
-		this.db
-			.prepare("UPDATE memories SET text = ?, confidence = ?, status = 'active', updated_at = ? WHERE id = ?")
-			.run(text, Math.max(existing.confidence, 0.8), Date.now(), existing.id);
-		return this.getMemoryById(existing.id)!;
-	}
+      )
+      .get(taskId) as MemoryRecord | undefined;
+    if (!existing) {
+      return this.createMemory({
+        scope: "task",
+        taskId,
+        kind: "note",
+        text,
+        source: "heuristic",
+        confidence: 0.8,
+        status: "active",
+      });
+    }
+    this.db
+      .prepare(
+        "UPDATE memories SET text = ?, confidence = ?, status = 'active', updated_at = ? WHERE id = ?",
+      )
+      .run(text, Math.max(existing.confidence, 0.8), Date.now(), existing.id);
+    return this.getMemoryById(existing.id)!;
+  }
 
-	getRelevantMemories(projectId?: string | null, taskId?: string | null): MemoryRecord[] {
-		const rows = this.db
-			.prepare(
-				`SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
+  getRelevantMemories(projectId?: string | null, taskId?: string | null): MemoryRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, scope, project_id as projectId, task_id as taskId, kind, text, confidence, status, source, created_at as createdAt, updated_at as updatedAt, last_used_at as lastUsedAt
 				 FROM memories
 				 WHERE status = 'active'
 				   AND (
@@ -476,30 +631,32 @@ export class LovelaceStore {
 				   confidence DESC,
 				   updated_at DESC
 				 LIMIT 20`,
-			)
-			.all(projectId ?? null, taskId ?? null) as MemoryRecord[];
-		return rows;
-	}
+      )
+      .all(projectId ?? null, taskId ?? null) as MemoryRecord[];
+    return rows;
+  }
 
-	markMemoriesUsed(ids: string[]) {
-		if (ids.length === 0) return;
-		const placeholders = ids.map(() => "?").join(", ");
-		this.db.prepare(`UPDATE memories SET last_used_at = ? WHERE id IN (${placeholders})`).run(Date.now(), ...ids);
-	}
+  markMemoriesUsed(ids: string[]) {
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => "?").join(", ");
+    this.db
+      .prepare(`UPDATE memories SET last_used_at = ? WHERE id IN (${placeholders})`)
+      .run(Date.now(), ...ids);
+  }
 
-	listPrsForTask(taskId: string): TaskPrLinkRecord[] {
-		const rows = this.db
-			.prepare(
-				`SELECT p.id, p.project_id as projectId, p.pr_number as prNumber, p.pr_url as prUrl, p.title, p.created_at as createdAt, p.updated_at as updatedAt,
+  listPrsForTask(taskId: string): TaskPrLinkRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT p.id, p.project_id as projectId, p.pr_number as prNumber, p.pr_url as prUrl, p.title, p.created_at as createdAt, p.updated_at as updatedAt,
 				        e.metadata_json as metadataJson
 				 FROM prs p
 				 JOIN edges e ON e.from_type = 'pr' AND e.from_id = p.id AND e.edge_type = 'relates_to' AND e.to_type = 'task' AND e.to_id = ?
 				 ORDER BY p.updated_at DESC`,
-			)
-			.all(taskId) as Array<PrRecord & { metadataJson: string | null }>;
-		return rows.map(({ metadataJson, ...pr }) => ({
-			pr,
-			backlinkStatus: parseBacklinkStatus(metadataJson),
-		}));
-	}
+      )
+      .all(taskId) as Array<PrRecord & { metadataJson: string | null }>;
+    return rows.map(({ metadataJson, ...pr }) => ({
+      pr,
+      backlinkStatus: parseBacklinkStatus(metadataJson),
+    }));
+  }
 }
