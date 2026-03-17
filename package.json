@@ -17,6 +17,7 @@
     "check": "npm-run-all --parallel lint format:check test"
   },
   "dependencies": {
+    "@tobilu/qmd": "2.0.1",
     "better-sqlite3": "^11.10.0"
   },
   "devDependencies": {

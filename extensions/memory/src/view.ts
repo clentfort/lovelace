@@ -26,8 +26,14 @@ export function isMemoryStale(
   return age > 90 * DAY_MS;
 }
 
+function formatRecordedAt(timestamp: number): string {
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
 function formatMemoryLine(memory: MemoryRecord, now = Date.now()): string {
-  return isMemoryStale(memory, now) ? `- [stale] ${memory.text}` : `- ${memory.text}`;
+  const stalePrefix = isMemoryStale(memory, now) ? "[stale] " : "";
+  const meta = `[id:${memory.id.slice(0, 8)} recorded:${formatRecordedAt(memory.createdAt)}]`;
+  return `- ${stalePrefix}${meta} ${memory.text}`;
 }
 
 export function taskStatusText(

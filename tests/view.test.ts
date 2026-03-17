@@ -56,7 +56,7 @@ describe("view helpers", () => {
     );
 
     expect(block).toBeTruthy();
-    expect(block).toMatch(/\[stale\] Old task note/);
+    expect(block).toMatch(/\[stale\] \[id:1 recorded:2026-03-07\] Old task note/);
     expect(block).toMatch(/Current task: PROJ-1/);
   });
 });

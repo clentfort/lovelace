@@ -1,19 +1,35 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import type { LovelaceStore } from "./db.js";
+import type { CreateMemoryInput } from "./db.js";
 
-function addFact(
+interface ScanMemoryWriter {
+  createMemory(input: CreateMemoryInput): Promise<{ text: string }> | { text: string };
+}
+
+async function addFact(
   created: string[],
   seen: Set<string>,
   text: string | null | undefined,
-  create: () => string,
+  create: () => Promise<string> | string,
 ) {
   if (!text || seen.has(text)) return;
   seen.add(text);
-  created.push(create());
+  created.push(await create());
 }
 
-export function scanProject(store: LovelaceStore, projectId: string, rootPath: string): string[] {
+async function createFact(
+  memoryBackend: ScanMemoryWriter,
+  input: CreateMemoryInput,
+): Promise<string> {
+  const memory = await memoryBackend.createMemory(input);
+  return memory.text;
+}
+
+export async function scanProject(
+  memoryBackend: ScanMemoryWriter,
+  projectId: string,
+  rootPath: string,
+): Promise<string[]> {
   const created: string[] = [];
   const seen = new Set<string>();
 
@@ -43,103 +59,87 @@ export function scanProject(store: LovelaceStore, projectId: string, rootPath: s
   }
 
   if (usesPnpm && hasWorkspace) {
-    addFact(
-      created,
-      seen,
-      "This repo uses pnpm and has workspace configuration.",
-      () =>
-        store.createMemory({
-          scope: "project",
-          projectId,
-          kind: "command",
-          text: "This repo uses pnpm and has workspace configuration.",
-          source: "scan",
-          confidence: 0.95,
-        }).text,
+    await addFact(created, seen, "This repo uses pnpm and has workspace configuration.", () =>
+      createFact(memoryBackend, {
+        scope: "project",
+        projectId,
+        kind: "command",
+        text: "This repo uses pnpm and has workspace configuration.",
+        source: "scan",
+        confidence: 0.95,
+      }),
     );
   } else {
     if (usesPnpm) {
-      addFact(
-        created,
-        seen,
-        "This repo uses pnpm.",
-        () =>
-          store.createMemory({
-            scope: "project",
-            projectId,
-            kind: "command",
-            text: "This repo uses pnpm.",
-            source: "scan",
-            confidence: 0.95,
-          }).text,
+      await addFact(created, seen, "This repo uses pnpm.", () =>
+        createFact(memoryBackend, {
+          scope: "project",
+          projectId,
+          kind: "command",
+          text: "This repo uses pnpm.",
+          source: "scan",
+          confidence: 0.95,
+        }),
       );
     }
     if (hasWorkspace) {
-      addFact(
+      await addFact(
         created,
         seen,
         "This repo appears to be a JavaScript/TypeScript workspace or monorepo.",
         () =>
-          store.createMemory({
+          createFact(memoryBackend, {
             scope: "project",
             projectId,
             kind: "structure",
             text: "This repo appears to be a JavaScript/TypeScript workspace or monorepo.",
             source: "scan",
             confidence: 0.85,
-          }).text,
+          }),
       );
     }
   }
 
   if (existsSync(cargoTomlPath)) {
-    addFact(
-      created,
-      seen,
-      "This repo has Rust/Cargo configuration.",
-      () =>
-        store.createMemory({
-          scope: "project",
-          projectId,
-          kind: "structure",
-          text: "This repo has Rust/Cargo configuration.",
-          source: "scan",
-          confidence: 0.9,
-        }).text,
+    await addFact(created, seen, "This repo has Rust/Cargo configuration.", () =>
+      createFact(memoryBackend, {
+        scope: "project",
+        projectId,
+        kind: "structure",
+        text: "This repo has Rust/Cargo configuration.",
+        source: "scan",
+        confidence: 0.9,
+      }),
     );
   }
 
   if (existsSync(pyprojectPath)) {
-    addFact(
-      created,
-      seen,
-      "This repo has Python pyproject configuration.",
-      () =>
-        store.createMemory({
-          scope: "project",
-          projectId,
-          kind: "structure",
-          text: "This repo has Python pyproject configuration.",
-          source: "scan",
-          confidence: 0.9,
-        }).text,
+    await addFact(created, seen, "This repo has Python pyproject configuration.", () =>
+      createFact(memoryBackend, {
+        scope: "project",
+        projectId,
+        kind: "structure",
+        text: "This repo has Python pyproject configuration.",
+        source: "scan",
+        confidence: 0.9,
+      }),
     );
   }
 
   if (existsSync(makefilePath)) {
-    addFact(
+    await addFact(
       created,
       seen,
       "This repo has a Makefile; common tasks may be exposed there.",
       () =>
-        store.createMemory({
+        createFact(memoryBackend, {
           scope: "project",
           projectId,
           kind: "command",
           text: "This repo has a Makefile; common tasks may be exposed there.",
           source: "scan",
           confidence: 0.8,
-        }).text,
+        }),
     );
   }
 
@@ -152,40 +152,34 @@ export function scanProject(store: LovelaceStore, projectId: string, rootPath: s
       else generatedDirs.push(candidate);
     }
   }
+
   if (generatedDirs.length > 0) {
     const generatedText =
       generatedDirs.length === 1
         ? `This repo has a likely generated-code directory at \`${generatedDirs[0]}\`.`
         : `This repo has likely generated-code directories at ${generatedDirs.map((dir) => `\`${dir}\``).join(", ")}.`;
-    addFact(
-      created,
-      seen,
-      generatedText,
-      () =>
-        store.createMemory({
-          scope: "project",
-          projectId,
-          kind: "constraint",
-          text: generatedText,
-          source: "scan",
-          confidence: 0.75,
-        }).text,
+    await addFact(created, seen, generatedText, () =>
+      createFact(memoryBackend, {
+        scope: "project",
+        projectId,
+        kind: "constraint",
+        text: generatedText,
+        source: "scan",
+        confidence: 0.75,
+      }),
     );
   }
+
   if (hasInfrastructureDir) {
-    addFact(
-      created,
-      seen,
-      "This repo has an `_infrastructure` directory.",
-      () =>
-        store.createMemory({
-          scope: "project",
-          projectId,
-          kind: "structure",
-          text: "This repo has an `_infrastructure` directory.",
-          source: "scan",
-          confidence: 0.75,
-        }).text,
+    await addFact(created, seen, "This repo has an `_infrastructure` directory.", () =>
+      createFact(memoryBackend, {
+        scope: "project",
+        projectId,
+        kind: "structure",
+        text: "This repo has an `_infrastructure` directory.",
+        source: "scan",
+        confidence: 0.75,
+      }),
     );
   }
 
@@ -203,21 +197,18 @@ export function scanProject(store: LovelaceStore, projectId: string, rootPath: s
       .map(({ entry }) => entry)
       .filter((entry) => !["generated", "_infrastructure"].includes(entry))
       .slice(0, 8);
+
     if (dirs.length > 0) {
       const dirsText = `Top-level directories include: ${dirs.join(", ")}.`;
-      addFact(
-        created,
-        seen,
-        dirsText,
-        () =>
-          store.createMemory({
-            scope: "project",
-            projectId,
-            kind: "structure",
-            text: dirsText,
-            source: "scan",
-            confidence: 0.6,
-          }).text,
+      await addFact(created, seen, dirsText, () =>
+        createFact(memoryBackend, {
+          scope: "project",
+          projectId,
+          kind: "structure",
+          text: dirsText,
+          source: "scan",
+          confidence: 0.6,
+        }),
       );
     }
   } catch {

@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("scanProject", () => {
-  it("dedupes overlapping repo facts", () => {
+  it("dedupes overlapping repo facts", async () => {
     const dir = mkdtempSync(join(tmpdir(), "lovelace-scan-"));
     cleanupPaths.push(dir);
     const dbPath = join(dir, "memory.db");
@@ -32,7 +32,7 @@ describe("scanProject", () => {
     const store = new LovelaceStore(dbPath);
     try {
       const project = store.upsertProject({ name: "repo", rootPath: repoPath });
-      const created = scanProject(store, project.id, repoPath);
+      const created = await scanProject(store, project.id, repoPath);
       expect(
         created.some((entry) => entry.includes("uses pnpm and has workspace configuration")),
       ).toBe(true);

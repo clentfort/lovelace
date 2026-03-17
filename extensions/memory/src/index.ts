@@ -1,21 +1,28 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { complete } from "@mariozechner/pi-ai";
+import {
+  convertToLlm,
+  serializeConversation,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@mariozechner/pi-coding-agent";
 import { LovelaceStore } from "./db.js";
 import { buildTaskContinuationSummary } from "./continuation.js";
+import { createMemoryBackend } from "./memory-backend.js";
 import {
   getSessionTaskId,
-  inferMemoryKind,
-  isInterestingProjectCommand,
   mentionsCurrentPr,
   parseRememberArgs,
   toolContentToText,
 } from "./helpers.js";
 import { extractTaskRef, parseJiraTaskContext, parsePrContext } from "./parse.js";
+import { buildMemoryExtractionPrompt, parseExtractedMemories } from "./extract.js";
 import { detectRepo, type RepoInfo } from "./repo.js";
 import { scanProject } from "./scan.js";
 import type {
   BacklinkStatus,
+  MemoryKind,
   MemoryRecord,
   PiSessionRecord,
   PrRecord,
@@ -35,11 +42,13 @@ interface RuntimeState {
   currentTask?: TaskRecord;
   currentPr?: PrRecord;
   currentBacklinkStatus?: BacklinkStatus;
+  recentExtractionFingerprints: string[];
 }
 
 export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
   const store = new LovelaceStore(DEFAULT_DB_PATH);
-  const state: RuntimeState = {};
+  const memoryBackend = createMemoryBackend(store);
+  const state: RuntimeState = { recentExtractionFingerprints: [] };
 
   function updateStatus(ctx: ExtensionContext) {
     ctx.ui.setStatus(
@@ -142,11 +151,192 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
     );
   }
 
-  function rememberCommand(command: string) {
-    if (!state.project) return;
-    const normalized = command.trim();
-    if (!normalized || !isInterestingProjectCommand(normalized)) return;
-    store.noteProjectCommandSuccess(state.project.id, normalized);
+  async function chooseMemoryExtractionModel(ctx: ExtensionContext) {
+    const preferred: Array<[string, string]> = [
+      ["google", "gemini-2.5-flash"],
+      ["anthropic", "claude-3-5-haiku-latest"],
+      ["openai", "gpt-5-mini"],
+    ];
+    for (const [provider, id] of preferred) {
+      const model = ctx.modelRegistry.find(provider, id);
+      if (!model) continue;
+      const apiKey = await ctx.modelRegistry.getApiKey(model);
+      if (!apiKey) continue;
+      return { model, apiKey };
+    }
+    return undefined;
+  }
+
+  async function classifyMemoryKind(text: string, ctx: ExtensionContext): Promise<MemoryKind> {
+    const selected = await chooseMemoryExtractionModel(ctx);
+    if (!selected) return "note";
+
+    const prompt = [
+      "Classify this memory into exactly one kind.",
+      "Allowed kinds: preference, structure, workflow, constraint, command, gotcha, note",
+      "Return only the kind token with no extra text.",
+      `Memory: ${text}`,
+    ].join("\n");
+
+    try {
+      const response = await complete(
+        selected.model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: prompt }],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: selected.apiKey, maxTokens: 12, reasoningEffort: "low" },
+      );
+
+      const raw = response.content
+        .filter((block): block is { type: "text"; text: string } => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim()
+        .toLowerCase();
+
+      const token = raw.match(
+        /\b(preference|structure|workflow|constraint|command|gotcha|note)\b/,
+      )?.[1];
+      if (!token) return "note";
+      return token as MemoryKind;
+    } catch {
+      return "note";
+    }
+  }
+
+  function fingerprint(text: string): string {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function rememberExtractionFingerprint(value: string) {
+    if (state.recentExtractionFingerprints.includes(value)) return;
+    state.recentExtractionFingerprints.push(value);
+    if (state.recentExtractionFingerprints.length > 80) state.recentExtractionFingerprints.shift();
+  }
+
+  async function learnFromConversationText(
+    conversationText: string,
+    ctx: ExtensionContext,
+    options?: { signal?: AbortSignal; maxChars?: number },
+  ) {
+    const normalized = conversationText.trim();
+    if (!normalized) return;
+
+    const maxChars = options?.maxChars ?? 28_000;
+    const trimmedText =
+      normalized.length > maxChars ? `...[truncated]\n${normalized.slice(-maxChars)}` : normalized;
+    const fp = fingerprint(trimmedText);
+    if (state.recentExtractionFingerprints.includes(fp)) return;
+
+    const selected = await chooseMemoryExtractionModel(ctx);
+    if (!selected) return;
+
+    rememberExtractionFingerprint(fp);
+
+    const prompt = buildMemoryExtractionPrompt({
+      projectName: state.project?.name,
+      repoRoot: state.repo?.rootPath,
+      currentTaskRef: state.currentTask?.ref,
+      conversationText: trimmedText,
+    });
+
+    try {
+      const response = await complete(
+        selected.model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: prompt }],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          apiKey: selected.apiKey,
+          maxTokens: 1100,
+          reasoningEffort: "low",
+          signal: options?.signal,
+        },
+      );
+
+      const raw = response.content
+        .filter((block): block is { type: "text"; text: string } => block.type === "text")
+        .map((block) => block.text)
+        .join("\n")
+        .trim();
+      if (!raw) return;
+
+      const extracted = parseExtractedMemories(raw);
+      let promotedCount = 0;
+      for (const memory of extracted) {
+        if (memory.scope === "project" && !state.project) continue;
+        if (memory.scope === "task" && !state.currentTask) continue;
+        const outcome = await memoryBackend.proposeMemory({
+          scope: memory.scope,
+          projectId: memory.scope === "project" ? state.project?.id : null,
+          taskId: memory.scope === "task" ? state.currentTask?.id : null,
+          kind: memory.kind,
+          text: memory.text,
+          source: "llm",
+          confidence: memory.confidence,
+          sessionId: state.piSession?.id,
+          evidenceFingerprint: `${fp}:${fingerprint(`${memory.scope}:${memory.text}`)}`,
+        });
+        if (outcome.promotedMemory) promotedCount += 1;
+      }
+      if (promotedCount > 0) {
+        ctx.ui.notify(
+          `Promoted ${promotedCount} memory proposal${promotedCount > 1 ? "s" : ""}`,
+          "info",
+        );
+      }
+    } catch {
+      // Best effort.
+    }
+  }
+
+  async function learnFromCompaction(
+    messages: Parameters<typeof convertToLlm>[0],
+    signal: AbortSignal,
+    ctx: ExtensionContext,
+  ) {
+    if (messages.length === 0) return;
+    const conversationText = serializeConversation(convertToLlm(messages)).trim();
+    await learnFromConversationText(conversationText, ctx, { signal, maxChars: 30_000 });
+  }
+
+  function getBranchMessages(ctx: ExtensionContext): Parameters<typeof convertToLlm>[0] {
+    const branch = ctx.sessionManager.getBranch() as Array<{
+      type?: string;
+      message?: { role?: string; content?: unknown; timestamp?: number };
+    }>;
+    const messages = branch
+      .filter((entry) => entry.type === "message" && entry.message?.role && entry.message.content)
+      .map((entry) => ({
+        role: entry.message!.role as "user" | "assistant",
+        content: entry.message!.content,
+        timestamp: entry.message!.timestamp ?? Date.now(),
+      }));
+    return messages.slice(-220);
+  }
+
+  async function learnFromCurrentBranch(ctx: ExtensionContext, options?: { maxChars?: number }) {
+    const messages = getBranchMessages(ctx);
+    if (messages.length === 0) return;
+    const conversationText = serializeConversation(convertToLlm(messages)).trim();
+    await learnFromConversationText(conversationText, ctx, options);
   }
 
   async function refreshContext(ctx: ExtensionContext) {
@@ -244,7 +434,7 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
     }
     if (!input) {
       ctx.ui.notify(
-        "Usage: /pr <number|url> | /pr show | /pr backlink <task|pr|both|unknown>",
+        "Usage: /ll:pr <number|url> | /ll:pr show | /ll:pr backlink <task|pr|both|unknown>",
         "warning",
       );
       return;
@@ -266,19 +456,36 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => refreshContext(ctx));
+  pi.on("session_before_switch", async (_event, ctx) => {
+    await learnFromCurrentBranch(ctx, { maxChars: 30_000 });
+  });
   pi.on("session_switch", async (_event, ctx) => refreshContext(ctx));
   pi.on("session_fork", async (_event, ctx) => refreshContext(ctx));
   pi.on("session_tree", async (_event, ctx) => refreshContext(ctx));
-  pi.on("session_shutdown", async () => store.close());
+  pi.on("agent_end", async (event, ctx) => {
+    const conversationText = serializeConversation(convertToLlm(event.messages)).trim();
+    await learnFromConversationText(conversationText, ctx, { maxChars: 20_000 });
+  });
+  pi.on("session_shutdown", async (_event, ctx) => {
+    await learnFromCurrentBranch(ctx, { maxChars: 30_000 });
+    await memoryBackend.close();
+    store.close();
+  });
 
   pi.on("session_before_compact", async (event, ctx) => {
+    const messages = [
+      ...event.preparation.messagesToSummarize,
+      ...event.preparation.turnPrefixMessages,
+    ];
+    await learnFromCompaction(messages, event.signal, ctx);
+
     if (!state.currentTask) return;
     const summary = buildTaskContinuationSummary({
       task: state.currentTask,
       pr: state.currentPr,
       backlinkStatus: state.currentBacklinkStatus,
       branch: state.repo?.branch,
-      messages: [...event.preparation.messagesToSummarize, ...event.preparation.turnPrefixMessages],
+      messages,
     });
     if (!summary) return;
     store.upsertTaskContinuationSummary(state.currentTask.id, summary);
@@ -287,12 +494,16 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, ctx) => {
     await detectTaskFromText(ctx, event.prompt, "manual");
-    const memories = store.getRelevantMemories(
+    const memories = (await memoryBackend.getRelevantMemories(
       state.project?.id,
       state.currentTask?.id,
-    ) as MemoryRecord[];
+      {
+        queryText: event.prompt,
+        limit: 14,
+      },
+    )) as MemoryRecord[];
     if (memories.length === 0 && !state.currentTask && !state.currentPr) return;
-    store.markMemoriesUsed(memories.map((memory) => memory.id));
+    await memoryBackend.markMemoriesUsed(memories.map((memory) => memory.id));
     const memoryBlock = formatMemoryBlock(
       memories,
       state.currentTask,
@@ -308,8 +519,6 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
     const command = String((event.input as { command?: string }).command ?? "").trim();
     const output = toolContentToText(event.content);
     if (!command) return;
-
-    rememberCommand(command);
 
     if (/\bjira\b/.test(command)) {
       const taskInfo = parseJiraTaskContext(`${command}\n${output}`);
@@ -365,22 +574,22 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
     }
   });
 
-  pi.registerCommand("task", {
-    description: "Set, clear, show, or list recent tasks",
+  pi.registerCommand("ll:task", {
+    description: "Set, clear, show, or list recent tasks (/ll:task ...)",
     handler: async (args, ctx) => handleTaskCommand(args, ctx),
   });
 
-  pi.registerCommand("pr", {
-    description: "Link a PR, show it, or update backlink status",
+  pi.registerCommand("ll:pr", {
+    description: "Link a PR, show it, or update backlink status (/ll:pr ...)",
     handler: async (args, ctx) => handlePrCommand(args, ctx),
   });
 
-  pi.registerCommand("remember", {
-    description: "Store a Lovelace memory: /remember <scope> <text>",
+  pi.registerCommand("ll:remember", {
+    description: "Store a Lovelace memory: /ll:remember <scope> <text>",
     handler: async (args, ctx) => {
       const parsed = parseRememberArgs(args ?? "");
       if (!parsed) {
-        ctx.ui.notify("Usage: /remember <user|project|domain|task> <text>", "warning");
+        ctx.ui.notify("Usage: /ll:remember <user|project|domain|task> <text>", "warning");
         return;
       }
       if (parsed.scope === "project" && !state.project) {
@@ -391,11 +600,11 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
         ctx.ui.notify("No current task set", "error");
         return;
       }
-      const memory = store.createMemory({
+      const memory = await memoryBackend.createMemory({
         scope: parsed.scope,
         projectId: parsed.scope === "project" ? state.project?.id : null,
         taskId: parsed.scope === "task" ? state.currentTask?.id : null,
-        kind: inferMemoryKind(parsed.text),
+        kind: await classifyMemoryKind(parsed.text, ctx),
         text: parsed.text,
         source: "manual",
         confidence: 1,
@@ -405,38 +614,153 @@ export default function lovelaceMemoryExtension(pi: ExtensionAPI) {
     },
   });
 
-  pi.registerCommand("forget", {
-    description: "Archive a memory by id",
+  pi.registerCommand("ll:forget", {
+    description: "Archive a memory by id prefix or full id (/ll:forget ...)",
     handler: async (args, ctx) => {
       const id = (args ?? "").trim();
       if (!id) {
-        ctx.ui.notify("Usage: /forget <memory-id>", "warning");
+        ctx.ui.notify("Usage: /ll:forget <memory-id>", "warning");
         return;
       }
-      store.archiveMemory(id);
-      ctx.ui.notify(`Archived memory ${id}`, "info");
+      const result = await memoryBackend.archiveMemory(id);
+      if (!result.ok) {
+        if (result.reason === "ambiguous") {
+          const options = (result.matches ?? []).slice(0, 5).map((value) => value.slice(0, 8));
+          ctx.ui.notify(
+            `Ambiguous id prefix '${id}'. Matches: ${options.join(", ")}${(result.matches?.length ?? 0) > 5 ? ", ..." : ""}`,
+            "warning",
+          );
+          return;
+        }
+        ctx.ui.notify(`No memory found for '${id}'`, "warning");
+        return;
+      }
+      ctx.ui.notify(`Archived memory ${result.id?.slice(0, 8) ?? id}`, "info");
     },
   });
 
-  pi.registerCommand("memory", {
-    description: "Show relevant Lovelace memory or run /memory scan",
+  pi.registerCommand("ll:memory", {
+    description:
+      "Show memory, proposals, /ll:memory scan|maintain, /ll:memory stats [global], or /ll:memory promote|reject <id>",
     handler: async (args, ctx) => {
-      if ((args ?? "").trim() === "scan") {
+      const trimmed = (args ?? "").trim();
+      if (/^proposals(?:\s+|$)/i.test(trimmed)) {
+        const query = trimmed.replace(/^proposals\s*/i, "").trim();
+        const proposals = await memoryBackend.listMemoryProposals(
+          state.project?.id,
+          state.currentTask?.id,
+          {
+            queryText: query || undefined,
+            limit: 24,
+            contextOnly: true,
+            statuses: ["proposed", "promoted"],
+          },
+        );
+        const body = proposals.length
+          ? proposals
+              .map(
+                (proposal) =>
+                  `- [id:${proposal.id.slice(0, 8)} status:${proposal.status} support:${proposal.supportCount} sessions:${proposal.distinctSessionCount}] (${proposal.scope}/${proposal.kind}) ${proposal.text}`,
+              )
+              .join("\n")
+          : "No memory proposals yet.";
+        await showModal(ctx, "Lovelace memory proposals", body);
+        return;
+      }
+      if (/^promote\s+/i.test(trimmed)) {
+        const id = trimmed.replace(/^promote\s+/i, "").trim();
+        if (!id) {
+          ctx.ui.notify("Usage: /ll:memory promote <proposal-id>", "warning");
+          return;
+        }
+        const result = await memoryBackend.promoteMemoryProposal(id);
+        if (!result.ok) {
+          if (result.reason === "ambiguous") {
+            const options = (result.matches ?? []).slice(0, 5).map((value) => value.slice(0, 8));
+            ctx.ui.notify(
+              `Ambiguous proposal id prefix '${id}'. Matches: ${options.join(", ")}${(result.matches?.length ?? 0) > 5 ? ", ..." : ""}`,
+              "warning",
+            );
+            return;
+          }
+          ctx.ui.notify(`No proposal found for '${id}'`, "warning");
+          return;
+        }
+        ctx.ui.notify(
+          `Promoted proposal ${result.proposal.id.slice(0, 8)}${result.memory ? ` -> memory ${result.memory.id.slice(0, 8)}` : ""}`,
+          "info",
+        );
+        return;
+      }
+      if (/^reject\s+/i.test(trimmed)) {
+        const id = trimmed.replace(/^reject\s+/i, "").trim();
+        if (!id) {
+          ctx.ui.notify("Usage: /ll:memory reject <proposal-id>", "warning");
+          return;
+        }
+        const result = await memoryBackend.rejectMemoryProposal(id);
+        if (!result.ok) {
+          if (result.reason === "ambiguous") {
+            const options = (result.matches ?? []).slice(0, 5).map((value) => value.slice(0, 8));
+            ctx.ui.notify(
+              `Ambiguous proposal id prefix '${id}'. Matches: ${options.join(", ")}${(result.matches?.length ?? 0) > 5 ? ", ..." : ""}`,
+              "warning",
+            );
+            return;
+          }
+          ctx.ui.notify(`No proposal found for '${id}'`, "warning");
+          return;
+        }
+        ctx.ui.notify(`Rejected proposal ${result.proposal.id.slice(0, 8)}`, "info");
+        return;
+      }
+      if (trimmed === "maintain") {
+        const result = await memoryBackend.runMaintenance();
+        ctx.ui.notify(
+          `Maintenance archived ${result.archivedCandidates} candidate and ${result.archivedInactive} inactive memories`,
+          "info",
+        );
+        return;
+      }
+      if (trimmed === "scan") {
         if (!state.project || !state.repo) {
           ctx.ui.notify("No active project detected", "error");
           return;
         }
-        const created = scanProject(store, state.project.id, state.repo.rootPath);
+        const created = await scanProject(memoryBackend, state.project.id, state.repo.rootPath);
         ctx.ui.notify(
           created.length ? `Scan saved ${created.length} memories` : "Scan found nothing new",
           "info",
         );
         return;
       }
-      const memories = store.getRelevantMemories(
+      if (trimmed === "stats" || /^stats\s+/i.test(trimmed)) {
+        const global = /\bglobal\b/i.test(trimmed);
+        const stats = await memoryBackend.getMemoryStats(state.project?.id, state.currentTask?.id, {
+          contextOnly: !global,
+        });
+        const lines = [
+          `Scope: ${global ? "global DB" : "current context"}`,
+          state.project ? `Project: ${state.project.name}` : "Project: unknown",
+          `Total memories: ${stats.total}`,
+          `Status: active ${stats.byStatus.active}, candidate ${stats.byStatus.candidate}, archived ${stats.byStatus.archived}`,
+          `Scope mix: user ${stats.byScope.user}, project ${stats.byScope.project}, domain ${stats.byScope.domain}, task ${stats.byScope.task}`,
+          `Source mix: manual ${stats.bySource.manual}, llm ${stats.bySource.llm}, scan ${stats.bySource.scan}, heuristic ${stats.bySource.heuristic}`,
+          `Created: last24h ${stats.createdLast24h}, last7d ${stats.createdLast7d}, last30d ${stats.createdLast30d}`,
+          "",
+          "Tips: /ll:memory proposals · /ll:memory stats global",
+        ];
+        await showModal(ctx, "Lovelace memory stats", lines.join("\n"));
+        return;
+      }
+      const memories = (await memoryBackend.getRelevantMemories(
         state.project?.id,
         state.currentTask?.id,
-      ) as MemoryRecord[];
+        {
+          queryText: trimmed || undefined,
+          limit: 20,
+        },
+      )) as MemoryRecord[];
       const body =
         formatMemoryBlock(
           memories,

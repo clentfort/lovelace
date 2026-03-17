@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import type { MemoryKind, MemoryScope, PrRecord } from "./types.js";
+import type { MemoryScope, PrRecord } from "./types.js";
 
 export function toolContentToText(content: unknown): string {
   if (!Array.isArray(content)) return "";
@@ -17,26 +17,6 @@ export function parseRememberArgs(args: string): { scope: MemoryScope; text: str
   const match = trimmed.match(/^(user|project|domain|task)\s+(.+)$/s);
   if (!match) return undefined;
   return { scope: match[1] as MemoryScope, text: match[2].trim() };
-}
-
-export function inferMemoryKind(text: string): MemoryKind {
-  const lowered = text.toLowerCase();
-  if (lowered.includes("prefer") || lowered.includes("ask before")) return "preference";
-  if (lowered.includes("do not") || lowered.includes("don't") || lowered.includes("avoid"))
-    return "constraint";
-  if (
-    lowered.includes("command") ||
-    lowered.includes("pnpm") ||
-    lowered.includes("npm") ||
-    lowered.includes("make ")
-  )
-    return "command";
-  if (lowered.includes("usually") || lowered.includes("workflow")) return "workflow";
-  return "note";
-}
-
-export function isInterestingProjectCommand(command: string): boolean {
-  return /^(pnpm|npm|yarn|make|cargo|pytest|go test|just)\b/.test(command.trim());
 }
 
 export function mentionsCurrentPr(pr: PrRecord | undefined, text: string): boolean {

@@ -13,7 +13,14 @@ We start with a Pi memory extension.
 
 - `extensions/memory/src/` — Pi memory extension implementation
 - `tests/` — store, parsing, continuation, scan, and view tests
-- `/task recent` — show recently linked tasks for the current project
+- `/ll:task recent` — show recently linked tasks for the current project
+- `/ll:memory stats [global]` — show memory counts by status/scope/source
+- `/ll:memory maintain` — archive stale candidate/inactive memories
+
+Optional backend selection:
+
+- `LOVELACE_MEMORY_BACKEND=sqlite` (default)
+- `LOVELACE_MEMORY_BACKEND=qmd` (uses `@tobilu/qmd` TS API for memory indexing/search, local-only files)
 
 ## Development
 

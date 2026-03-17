@@ -9,6 +9,8 @@ export type MemoryKind =
   | "note";
 export type MemoryStatus = "candidate" | "active" | "archived";
 export type MemorySource = "manual" | "heuristic" | "scan" | "llm";
+export type MemoryProposalStatus = "proposed" | "promoted" | "rejected" | "archived";
+export type MemoryProposalSource = "manual" | "llm" | "scan" | "heuristic";
 export type TaskSourceType = "jira" | "slack" | "mail" | "manual";
 export type BacklinkStatus = "unknown" | "task-linked-to-pr" | "pr-linked-to-task" | "both";
 
@@ -34,6 +36,27 @@ export interface MemoryRecord {
   createdAt: number;
   updatedAt: number;
   lastUsedAt: number | null;
+}
+
+export interface MemoryProposalRecord {
+  id: string;
+  scope: MemoryScope;
+  projectId: string | null;
+  taskId: string | null;
+  kind: MemoryKind;
+  text: string;
+  textCanonical: string;
+  status: MemoryProposalStatus;
+  source: MemoryProposalSource;
+  confidenceMax: number;
+  supportCount: number;
+  distinctSessionCount: number;
+  distinctTaskCount: number;
+  promotedMemoryId: string | null;
+  createdAt: number;
+  updatedAt: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
 }
 
 export interface TaskRecord {
